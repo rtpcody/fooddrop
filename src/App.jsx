@@ -812,7 +812,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
             <h3 style={{ marginBottom: 16 }}>Your Information</h3>
             <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Your full name" value={name} onChange={(e) => setName(e.target.value)} /></div>
             <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={(e) => setEmail(e.target.value)} /><div className="form-hint">We'll send your order confirmation here</div></div>
-            <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="555-0100" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+            <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(808)555-0100" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
             <div className="form-group">
               <label className="form-label">How should we reach you about future drops?</label>
               <div style={{ display: "flex", gap: 20 }}>
