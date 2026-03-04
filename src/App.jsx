@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v4 — Revenue dashboard, images, order editing, archive
+// FOODDROP MVP v5 — Clean dashboard, revenue modal, getting started, image lightbox
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -115,6 +115,22 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 .img-upload{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:20px;text-align:center;cursor:pointer;transition:all .15s;position:relative;overflow:hidden}.img-upload:hover{border-color:var(--accent);background:var(--accent-light)}.img-upload input{position:absolute;inset:0;opacity:0;cursor:pointer}.img-upload-preview{width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px}
 .rev-bar-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}.rev-bar-label{width:140px;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}.rev-bar-track{flex:1;height:24px;background:var(--surface-alt);border-radius:4px;overflow:hidden;position:relative}.rev-bar-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .4s ease;min-width:2px}.rev-bar-val{width:70px;text-align:right;font-size:13px;font-weight:600;flex-shrink:0}
 @media(max-width:640px){.form-row{grid-template-columns:1fr}.stats-row{grid-template-columns:1fr 1fr}h1{font-size:24px}.main-content{padding:20px 16px}.cust-header-name{font-size:28px}.creator-nav{overflow-x:auto}.creator-nav button{white-space:nowrap;font-size:13px;padding:14px 16px}.cust-body{padding:24px 16px 64px}.rev-bar-label{width:100px}}
+
+.stat-card-clickable{cursor:pointer;transition:all .2s}.stat-card-clickable:hover{border-color:var(--accent);box-shadow:var(--shadow)}.stat-card-clickable .stat-label{color:var(--accent)}
+
+.lightbox-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:200;cursor:pointer;padding:20px}.lightbox-img{max-width:90vw;max-height:85vh;object-fit:contain;border-radius:var(--radius);box-shadow:var(--shadow-lg)}
+
+.getting-started{background:linear-gradient(135deg,var(--accent-light),#fff8f5);border:1px solid #f0d4c4;border-radius:var(--radius);padding:32px;margin-bottom:32px}
+.gs-title{font-family:var(--font-display);font-size:28px;font-weight:700;margin-bottom:8px}
+.gs-sub{color:var(--text-secondary);font-size:15px;margin-bottom:24px}
+.gs-steps{display:grid;gap:16px}
+.gs-step{display:flex;gap:16px;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px 20px;cursor:pointer;transition:all .15s}
+.gs-step:hover{border-color:var(--accent);box-shadow:var(--shadow-sm)}
+.gs-step-num{width:32px;height:32px;background:var(--accent);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0}
+.gs-step-done{background:var(--green)}
+.gs-step-title{font-weight:600;font-size:15px;margin-bottom:2px}
+.gs-step-desc{font-size:13px;color:var(--text-secondary)}
+
 `;
 
 // ============================================================
@@ -191,6 +207,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [showEditCustomer, setShowEditCustomer] = useState(null);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showEditOrder, setShowEditOrder] = useState(null);
+  const [showRevenue, setShowRevenue] = useState(false);
   const customerUrl = window.location.origin + window.location.pathname;
 
   const handleCreateDrop = async (d, items) => {
@@ -250,7 +267,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
         ))}
       </nav>
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
-        {tab==="dashboard" && <DashboardTab customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
+        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setShowRevenue(true)} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer}/>}
@@ -264,18 +281,94 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       {showEditProfile && <ProfileFormModal creator={creator} onSave={handleEditProfile} onClose={()=>setShowEditProfile(false)}/>}
       {showCompose && <ComposeModal customers={customers} onClose={()=>setShowCompose(false)} onSend={()=>{setShowCompose(false);showToast("Copied to clipboard!")}}/>}
       {showEditOrder && <EditOrderModal order={showEditOrder.order} dropItems={getDropItems(showEditOrder.dropId)} existingOrderItems={getOrderItems(showEditOrder.order.id)} onSave={(items)=>handleEditOrder(showEditOrder.order.id,items,showEditOrder.dropId)} onClose={()=>setShowEditOrder(null)}/>}
+      {showRevenue && <RevenueModal drops={drops} orders={orders} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onClose={()=>setShowRevenue(false)} onViewDrop={d=>{setShowRevenue(false);setSelectedDrop(d);setTab("drops")}}/>}
     </>
   );
 }
 
 // ============================================================
-// DASHBOARD TAB — Revenue breakdown
+// DASHBOARD TAB — Clean with getting started + clickable revenue
 // ============================================================
-function DashboardTab({ customers, drops, orders, orderItems, dropItems, getDropOrders, getDropItems, getOrderItems, onViewDrop }) {
+function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems, getDropOrders, getDropItems, getOrderItems, onViewDrop, onShowRevenue, onGoToDrops, onNewDrop, onGoToSettings, onGoToCustomers }) {
   const activeDrops = drops.filter(d => d.status === "active" && !d.archived);
   const nonArchived = drops.filter(d => !d.archived);
-  const totalRev = orders.filter(o=>o.status!=="cancelled").reduce((s, o) => s + Number(o.total), 0);
   const confirmedOrders = orders.filter(o => o.status !== "cancelled");
+  const totalRev = confirmedOrders.reduce((s, o) => s + Number(o.total), 0);
+
+  const hasProfile = creator?.name && creator.name !== "My Food Business";
+  const hasDrops = drops.length > 0;
+  const hasOrders = orders.length > 0;
+  const isNewCreator = !hasDrops;
+
+  // Getting started steps
+  const steps = [
+    { num: 1, title: "Set up your profile", desc: "Add your business name and tagline so customers know who you are.", done: hasProfile, action: onGoToSettings },
+    { num: 2, title: "Create your first drop", desc: "Add menu items, set a pickup date and location, and upload food photos.", done: hasDrops, action: onNewDrop },
+    { num: 3, title: "Share your page with customers", desc: "Copy your customer link and send it out via text or email.", done: hasDrops && customers.length > 0, action: null },
+    { num: 4, title: "Manage incoming orders", desc: "Track who ordered, view your prep summary, and mark pickups complete.", done: hasOrders, action: onGoToDrops },
+  ];
+
+  return (<>
+    <div style={{marginBottom:28}}><h1>Dashboard</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>Welcome back{creator?.name ? `, ${creator.name}` : ""}!</p></div>
+
+    {/* Getting Started Guide — shows when no drops exist */}
+    {isNewCreator && (
+      <div className="getting-started">
+        <div className="gs-title">Let's get you set up!</div>
+        <div className="gs-sub">Follow these steps to start taking orders from your customers.</div>
+        <div className="gs-steps">
+          {steps.map(step => (
+            <div key={step.num} className="gs-step" onClick={step.action || undefined} style={{cursor: step.action ? "pointer" : "default"}}>
+              <div className={`gs-step-num ${step.done ? "gs-step-done" : ""}`}>{step.done ? "✓" : step.num}</div>
+              <div><div className="gs-step-title">{step.title}</div><div className="gs-step-desc">{step.desc}</div></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    {/* Stats Row — always visible */}
+    <div className="stats-row">
+      <div className="stat-card stat-card-clickable" onClick={onShowRevenue}>
+        <div className="stat-label">Total Revenue →</div>
+        <div className="stat-value">{fmt(totalRev)}</div>
+        <div className="stat-sub">Click for breakdown</div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Orders</div>
+        <div className="stat-value">{confirmedOrders.length}</div>
+      </div>
+      <div className="stat-card stat-card-clickable" onClick={onGoToCustomers}>
+        <div className="stat-label">Customers →</div>
+        <div className="stat-value">{customers.length}</div>
+      </div>
+    </div>
+
+    {/* Active Drops Quick View */}
+    {activeDrops.length > 0 && (<>
+      <div className="section-header"><h2>Active Drops</h2><button className="btn btn-ghost btn-sm" onClick={onGoToDrops}>View All →</button></div>
+      <div style={{display:"grid",gap:16}}>{activeDrops.map(drop=>{const dO=getDropOrders(drop.id).filter(o=>o.status!=="cancelled");return(<div key={drop.id} className="card card-hover drop-card" onClick={()=>onViewDrop(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><span className="badge badge-active">Active</span></div><div style={{marginTop:16,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> orders · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></div>)})}</div>
+    </>)}
+
+    {/* Prompt to create first drop if they have none */}
+    {!isNewCreator && activeDrops.length === 0 && (
+      <div className="card" style={{textAlign:"center",padding:32}}>
+        <div className="empty-state-icon" style={{margin:"0 auto 12px"}}>{I.drop}</div>
+        <h3>No active drops</h3>
+        <p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4,marginBottom:16}}>Create a new drop to start taking orders.</p>
+        <button className="btn btn-primary" onClick={onNewDrop}>{I.plus} New Drop</button>
+      </div>
+    )}
+  </>);
+}
+
+// ============================================================
+// REVENUE MODAL
+// ============================================================
+function RevenueModal({ drops, orders, getDropOrders, getOrderItems, customers, onClose, onViewDrop }) {
+  const nonArchived = drops.filter(d => !d.archived);
+  const confirmedOrders = orders.filter(o => o.status !== "cancelled");
+  const totalRev = confirmedOrders.reduce((s, o) => s + Number(o.total), 0);
 
   // Revenue per drop
   const dropRevenue = nonArchived.map(drop => {
@@ -303,19 +396,18 @@ function DashboardTab({ customers, drops, orders, orderItems, dropItems, getDrop
   const repeatCustomers = Object.values(custOrderCounts).filter(c => c > 1).length;
   const avgOrderValue = confirmedOrders.length > 0 ? totalRev / confirmedOrders.length : 0;
 
-  return (<>
-    <div style={{marginBottom:28}}><h1>Dashboard</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>Revenue and performance overview</p></div>
-    <div className="stats-row">
-      <div className="stat-card"><div className="stat-label">Total Revenue</div><div className="stat-value">{fmt(totalRev)}</div><div className="stat-sub">Cash to collect</div></div>
-      <div className="stat-card"><div className="stat-label">Orders</div><div className="stat-value">{confirmedOrders.length}</div><div className="stat-sub">{orders.filter(o=>o.status==="cancelled").length} cancelled</div></div>
-      <div className="stat-card"><div className="stat-label">Avg Order</div><div className="stat-value">{fmt(avgOrderValue)}</div></div>
-      <div className="stat-card"><div className="stat-label">Customers</div><div className="stat-value">{customers.length}</div><div className="stat-sub">{repeatCustomers} repeat</div></div>
-    </div>
+  return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:640}}>
+      <div className="modal-header"><h2>Revenue Breakdown</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
 
-    {/* Revenue by Drop */}
-    {dropRevenue.length > 0 && (
-      <div className="card" style={{marginBottom:24}}>
-        <h3 style={{marginBottom:16}}>Revenue by Drop</h3>
+      <div className="stats-row" style={{marginBottom:24}}>
+        <div className="stat-card"><div className="stat-label">Total Revenue</div><div className="stat-value">{fmt(totalRev)}</div></div>
+        <div className="stat-card"><div className="stat-label">Avg Order</div><div className="stat-value">{fmt(avgOrderValue)}</div></div>
+        <div className="stat-card"><div className="stat-label">Repeat Customers</div><div className="stat-value">{repeatCustomers}</div></div>
+      </div>
+
+      {dropRevenue.length > 0 && (<div style={{marginBottom:24}}>
+        <h3 style={{marginBottom:12}}>Revenue by Drop</h3>
         {dropRevenue.map(drop => (
           <div key={drop.id} className="rev-bar-row" style={{cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
             <div className="rev-bar-label" title={drop.title}>{drop.title}</div>
@@ -323,13 +415,10 @@ function DashboardTab({ customers, drops, orders, orderItems, dropItems, getDrop
             <div className="rev-bar-val">{fmt(drop.revenue)}</div>
           </div>
         ))}
-      </div>
-    )}
+      </div>)}
 
-    {/* Top Selling Items */}
-    {topItems.length > 0 && (
-      <div className="card" style={{marginBottom:24}}>
-        <h3 style={{marginBottom:16}}>Top Selling Items</h3>
+      {topItems.length > 0 && (<div>
+        <h3 style={{marginBottom:12}}>Top Selling Items</h3>
         {topItems.map((item, i) => (
           <div key={i} className="rev-bar-row">
             <div className="rev-bar-label" title={item.name}>{item.name}</div>
@@ -337,15 +426,11 @@ function DashboardTab({ customers, drops, orders, orderItems, dropItems, getDrop
             <div className="rev-bar-val">{item.qty} sold · {fmt(item.revenue)}</div>
           </div>
         ))}
-      </div>
-    )}
+      </div>)}
 
-    {/* Active Drops Quick View */}
-    {activeDrops.length > 0 && (<>
-      <div className="section-header"><h2>Active Drops</h2></div>
-      <div style={{display:"grid",gap:16}}>{activeDrops.map(drop=>{const dO=getDropOrders(drop.id);return(<div key={drop.id} className="card card-hover drop-card" onClick={()=>onViewDrop(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><span className="badge badge-active">Active</span></div><div style={{marginTop:16,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> orders · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></div>)})}</div>
-    </>)}
-  </>);
+      {dropRevenue.length === 0 && <div className="empty-state"><p>No revenue data yet. Revenue will appear here after your first orders.</p></div>}
+    </div></div>
+  );
 }
 
 // ============================================================
@@ -647,6 +732,18 @@ function ComposeModal({ customers, onClose, onSend }) {
 }
 
 // ============================================================
+// IMAGE LIGHTBOX
+// ============================================================
+function Lightbox({ src, onClose }) {
+  if (!src) return null;
+  return (
+    <div className="lightbox-overlay" onClick={onClose}>
+      <img src={src} alt="" className="lightbox-img" onClick={e=>e.stopPropagation()}/>
+    </div>
+  );
+}
+
+// ============================================================
 // CUSTOMER STOREFRONT (unchanged except image support)
 // ============================================================
 function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData, customers }) {
@@ -674,6 +771,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
   const [step, setStep] = useState("menu");
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [phone, setPhone] = useState(""); const [preferContact, setPreferContact] = useState("email");
   const [placing, setPlacing] = useState(false);
+  const [lightboxImg, setLightboxImg] = useState(null);
 
   const updateCart = (itemId, delta, item) => { setCart(prev => { const curr=prev[itemId]||0; const next=Math.max(0,curr+delta); const max=item.quantity>0?item.quantity-item.claimed:999; if(next>max) return prev; return{...prev,[itemId]:next}; }); };
   const cartCount = Object.values(cart).reduce((s,q)=>s+q,0);
@@ -703,8 +801,9 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
 
     {step==="menu"&&(<>
       <h3 style={{marginBottom:4}}>Menu</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16}}>Select what you'd like to order</p>
-      <div className="card">{items.map(item=>{const avail=item.quantity>0?item.quantity-item.claimed:-1;const sold=item.quantity>0&&avail<=0;return(<div key={item.id} className="oi-row" style={{opacity:sold?.5:1}}><div className="oi-info" style={{display:"flex",gap:12,alignItems:"center"}}>{item.image_url&&<img src={item.image_url} alt="" style={{width:56,height:56,borderRadius:8,objectFit:"cover",flexShrink:0}}/>}<div><div className="oi-name">{item.name}</div><div className="oi-price">{fmt(item.price)}</div><div className="oi-avail">{sold?"Sold out":item.quantity>0?`${avail} left`:"Available"}</div></div></div>{!sold&&<div className="qty-ctrl"><button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!cart[item.id]}>−</button><span className="qty-val">{cart[item.id]||0}</span><button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button></div>}</div>)})}</div>
+      <div className="card">{items.map(item=>{const avail=item.quantity>0?item.quantity-item.claimed:-1;const sold=item.quantity>0&&avail<=0;return(<div key={item.id} className="oi-row" style={{opacity:sold?.5:1}}><div className="oi-info" style={{display:"flex",gap:12,alignItems:"center"}}>{item.image_url&&<img src={item.image_url} alt="" onClick={e=>{e.stopPropagation();setLightboxImg(item.image_url)}} style={{width:56,height:56,borderRadius:8,objectFit:"cover",flexShrink:0,cursor:"pointer",transition:"transform .15s"}} onMouseOver={e=>e.target.style.transform="scale(1.05)"} onMouseOut={e=>e.target.style.transform="scale(1)"}/>}<div><div className="oi-name">{item.name}</div><div className="oi-price">{fmt(item.price)}</div><div className="oi-avail">{sold?"Sold out":item.quantity>0?`${avail} left`:"Available"}</div></div></div>{!sold&&<div className="qty-ctrl"><button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!cart[item.id]}>−</button><span className="qty-val">{cart[item.id]||0}</span><button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button></div>}</div>)})}</div>
       {cartCount>0&&<div style={{position:"sticky",bottom:16,marginTop:24}}><button className="btn btn-primary btn-full" onClick={()=>setStep("checkout")} style={{padding:"14px 24px",fontSize:16,boxShadow:"var(--shadow-lg)"}}>Continue — {cartCount} item{cartCount!==1?"s":""}, {fmt(cartTotal)}</button></div>}
+      <Lightbox src={lightboxImg} onClose={()=>setLightboxImg(null)}/>
     </>)}
 
     {step==="checkout"&&(<>
