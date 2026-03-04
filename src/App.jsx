@@ -553,7 +553,7 @@ function NewCustomerModal({ onSave, onClose }) {
       <div className="modal-header"><h2>Add Customer</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} /></div>
       <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="email@example.com" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
-      <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="555-0100" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+      <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(808)555-0100" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
       <div className="form-group"><label className="form-label">Preferred Contact</label><select className="form-select" value={prefer} onChange={(e) => setPrefer(e.target.value)}><option value="email">Email</option><option value="sms">SMS / Text</option></select></div>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving ? "Adding..." : "Add Customer"}</button>
     </div></div>
