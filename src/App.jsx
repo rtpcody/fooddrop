@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v6 — Enhanced CRM, bulk email, delete customer, no order types
+// FOODDROP MVP v7 — Bulk select, drop duplication, customer notes, search, CSV export
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -71,6 +71,9 @@ const I = {
   share: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>,
   history: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
   archive: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>,
+  download: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  search: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  copy: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
   image: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
   chart: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
 };
@@ -130,6 +133,9 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 .gs-step-done{background:var(--green)}
 .gs-step-title{font-weight:600;font-size:15px;margin-bottom:2px}
 .gs-step-desc{font-size:13px;color:var(--text-secondary)}
+
+.search-bar{position:relative;margin-bottom:16px}.search-bar input{width:100%;padding:10px 14px 10px 38px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-body);font-size:14px;background:var(--surface);transition:border-color .15s}.search-bar input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-light)}.search-bar svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-tertiary)}
+.bulk-bar{background:var(--accent-light);border:1px solid #f0d4c4;border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;animation:fadeUp .2s ease}.bulk-bar-count{font-size:14px;font-weight:600;color:var(--accent)}.bulk-bar-actions{display:flex;gap:8px;flex-wrap:wrap}
 
 `;
 
@@ -208,6 +214,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showEditOrder, setShowEditOrder] = useState(null);
   const [showRevenue, setShowRevenue] = useState(false);
+  const [duplicateDrop, setDuplicateDrop] = useState(null);
   const customerUrl = window.location.origin + window.location.pathname;
 
   const handleCreateDrop = async (d, items) => {
@@ -215,7 +222,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "" }).select("*").single().execute();
     if (error || !nd) { showToast("Failed to create drop", "error"); return; }
     await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "" }))).execute();
-    setShowNewDrop(false); showToast("Drop created!"); loadData();
+    setShowNewDrop(false); setDuplicateDrop(null); showToast("Drop created!"); loadData();
   };
 
   const handleEditDrop = async (dropId, d, items) => {
@@ -230,8 +237,8 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     setShowEditDrop(null); showToast("Drop updated!"); loadData();
   };
 
-  const handleAddCustomer = async (d) => { if (!creator) return; await supabase.from("customers").insert({ creator_id: creator.id, name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact }).execute(); setShowNewCustomer(false); showToast(`${d.name} added.`); loadData(); };
-  const handleEditCustomer = async (custId, d) => { await supabase.from("customers").update({ name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact }).eq("id", custId).execute(); setShowEditCustomer(null); setSelectedCustomer(null); showToast("Customer updated."); loadData(); };
+  const handleAddCustomer = async (d) => { if (!creator) return; await supabase.from("customers").insert({ creator_id: creator.id, name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).execute(); setShowNewCustomer(false); showToast(`${d.name} added.`); loadData(); };
+  const handleEditCustomer = async (custId, d) => { await supabase.from("customers").update({ name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).eq("id", custId).execute(); setShowEditCustomer(null); setSelectedCustomer(null); showToast("Customer updated."); loadData(); };
   const handleDeleteCustomer = async (custId, custName) => { await supabase.from("customers").delete().eq("id", custId).execute(); setSelectedCustomer(null); showToast(`${custName} removed.`); loadData(); };
   const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated!"); loadData(); };
   const handleUpdateOrderStatus = async (oid, status) => { await supabase.from("orders").update({ status }).eq("id", oid).execute(); showToast(`Order marked as ${status.replace("_"," ")}.`); loadData(); };
@@ -269,13 +276,13 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       </nav>
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setShowRevenue(true)} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")}/>}
-        {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop}/>}
-        {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})}/>}
+        {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}}/>}
+        {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}/>}
         {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)}/>}
       </div>
-      {showNewDrop && <DropFormModal mode="create" onSave={handleCreateDrop} onClose={()=>setShowNewDrop(false)}/>}
+      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null)}}/>}
       {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
       {showNewCustomer && <CustomerFormModal mode="create" onSave={handleAddCustomer} onClose={()=>setShowNewCustomer(false)}/>}
       {showEditCustomer && <CustomerFormModal mode="edit" customer={showEditCustomer} onSave={d=>handleEditCustomer(showEditCustomer.id,d)} onClose={()=>setShowEditCustomer(null)}/>}
@@ -437,7 +444,7 @@ function RevenueModal({ drops, orders, getDropOrders, getOrderItems, customers, 
 // ============================================================
 // DROPS TAB — with archive toggle
 // ============================================================
-function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive }) {
+function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive, onDuplicate }) {
   const [showArchived, setShowArchived] = useState(false);
   const visible = showArchived ? drops : drops.filter(d => !d.archived);
   const archivedCount = drops.filter(d => d.archived).length;
@@ -451,7 +458,7 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
       </div>
     </div>
     {visible.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.drop}</div><h3>No drops yet</h3><p style={{marginTop:8}}>Create your first drop to start taking orders.</p></div>):(
-      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button></>:<span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
+      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
     )}
   </>);
 }
@@ -459,7 +466,7 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
 // ============================================================
 // DROP DETAIL — with archive, edit order buttons
 // ============================================================
-function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customers, onBack, onUpdateOrderStatus, onEndDrop, onEditDrop, onArchiveDrop, onEditOrder }) {
+function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customers, onBack, onUpdateOrderStatus, onEndDrop, onEditDrop, onArchiveDrop, onEditOrder, onDuplicate }) {
   const dI=getDropItems(drop.id); const dO=getDropOrders(drop.id); const rev=dO.filter(o=>o.status!=="cancelled").reduce((s,o)=>s+Number(o.total),0);
   const prep=dI.map(item=>{const tot=dO.filter(o=>o.status!=="cancelled").reduce((sum,order)=>{const ois=getOrderItems(order.id);const oi=ois.find(i=>i.drop_item_id===item.id);return sum+(oi?oi.quantity:0)},0);return{...item,totalOrdered:tot}});
 
@@ -473,6 +480,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
       </div>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         <button className="btn btn-secondary btn-sm" onClick={onEditDrop}>{I.edit} Edit</button>
+        <button className="btn btn-secondary btn-sm" onClick={onDuplicate}>{I.copy} Duplicate</button>
         <span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>
         {drop.status==="active"&&<button className="btn btn-danger btn-sm" onClick={()=>onEndDrop(drop.id)}>End Drop</button>}
         <button className="btn btn-ghost btn-sm" onClick={onArchiveDrop} title="Archive this drop">{I.archive} Archive</button>
@@ -491,31 +499,58 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
 }
 
 // ============================================================
-// CUSTOMERS TAB + DETAIL — Enhanced CRM
+// CUSTOMERS TAB + DETAIL — Enhanced CRM v7
 // ============================================================
 function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, onCompose, onSelectCustomer }) {
   const [copied, setCopied] = useState(null);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState([]);
   const activeDrops = drops.filter(d => d.status === "active" && !d.archived);
-  const latestActiveDrop = activeDrops[0]; // most recent active drop
+  const latestActiveDrop = activeDrops[0];
+
+  // Filter customers by search
+  const filtered = customers.filter(c => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q) || c.phone?.includes(q) || c.notes?.toLowerCase().includes(q);
+  });
 
   const emailCustomers = customers.filter(c => c.prefer_contact === "email");
   const smsCustomers = customers.filter(c => c.prefer_contact === "sms");
 
-  const copyEmails = () => {
-    const emails = emailCustomers.map(c => c.email).join(", ");
-    navigator.clipboard?.writeText(emails);
-    setCopied("email");
-    setTimeout(() => setCopied(null), 2500);
+  const toggleSelect = (id) => setSelected(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
+  const toggleAll = () => setSelected(selected.length === filtered.length ? [] : filtered.map(c=>c.id));
+  const selCusts = customers.filter(c => selected.includes(c.id));
+  const selEmails = selCusts.filter(c => c.email);
+  const selSms = selCusts.filter(c => c.phone);
+
+  const copySelected = (type) => {
+    if (type === "email") {
+      navigator.clipboard?.writeText(selEmails.map(c=>c.email).join(", "));
+      setCopied("sel-email"); setTimeout(()=>setCopied(null),2500);
+    } else {
+      navigator.clipboard?.writeText(selSms.map(c=>`${c.name}: ${c.phone}`).join("\n"));
+      setCopied("sel-sms"); setTimeout(()=>setCopied(null),2500);
+    }
   };
 
-  const copySmsNumbers = () => {
-    const numbers = smsCustomers.map(c => `${c.name}: ${c.phone}`).join("\n");
-    navigator.clipboard?.writeText(numbers);
-    setCopied("sms");
-    setTimeout(() => setCopied(null), 2500);
+  const copyEmails = () => { navigator.clipboard?.writeText(emailCustomers.map(c=>c.email).join(", ")); setCopied("email"); setTimeout(()=>setCopied(null),2500); };
+  const copySmsNumbers = () => { navigator.clipboard?.writeText(smsCustomers.map(c=>`${c.name}: ${c.phone}`).join("\n")); setCopied("sms"); setTimeout(()=>setCopied(null),2500); };
+
+  const exportCSV = () => {
+    const header = "Name,Email,Phone,Preferred Contact,Notes,Total Orders,Total Spent";
+    const rows = customers.map(c => {
+      const cO = orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");
+      const spent = cO.reduce((s,o)=>s+Number(o.total),0);
+      return `"${c.name||""}","${c.email||""}","${c.phone||""}","${c.prefer_contact||""}","${(c.notes||"").replace(/"/g,'""')}",${cO.length},${spent.toFixed(2)}`;
+    });
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "customers.csv"; a.click();
+    URL.revokeObjectURL(url);
   };
 
-  // Check who ordered the latest active drop
   const getDropOrderStatus = (customerId) => {
     if (!latestActiveDrop) return null;
     const dropOrders = orders.filter(o => o.drop_id === latestActiveDrop.id && o.status !== "cancelled");
@@ -523,22 +558,40 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
   };
 
   return (<>
-    <div className="section-header"><div><h1>Customers</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>{customers.length} customer{customers.length!==1?"s":""} · {emailCustomers.length} email, {smsCustomers.length} SMS</p></div><div style={{display:"flex",gap:10,flexWrap:"wrap"}}><button className="btn btn-secondary btn-sm" onClick={onCompose}>{I.send} Compose</button><button className="btn btn-primary" onClick={onAddCustomer}>{I.plus} Add Customer</button></div></div>
+    <div className="section-header"><div><h1>Customers</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>{customers.length} customer{customers.length!==1?"s":""} · {emailCustomers.length} email, {smsCustomers.length} SMS</p></div><div style={{display:"flex",gap:10,flexWrap:"wrap"}}><button className="btn btn-secondary btn-sm" onClick={exportCSV}>{I.download} Export CSV</button><button className="btn btn-secondary btn-sm" onClick={onCompose}>{I.send} Compose</button><button className="btn btn-primary" onClick={onAddCustomer}>{I.plus} Add Customer</button></div></div>
 
-    {/* Quick actions: bulk copy */}
+    {/* Quick actions */}
     {customers.length > 0 && (
-      <div className="card" style={{marginBottom:20,padding:16,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
-        <span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Quick Actions:</span>
-        {emailCustomers.length > 0 && <button className="btn btn-secondary btn-sm" onClick={copyEmails}>{copied==="email"?<>{I.check} Copied!</>:<>{I.mail} Copy {emailCustomers.length} Email{emailCustomers.length!==1?"s":""} for BCC</>}</button>}
-        {smsCustomers.length > 0 && <button className="btn btn-secondary btn-sm" onClick={copySmsNumbers}>{copied==="sms"?<>{I.check} Copied!</>:<>{I.phone} Copy {smsCustomers.length} SMS Contact{smsCustomers.length!==1?"s":""}</>}</button>}
+      <div className="card" style={{marginBottom:16,padding:12,display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+        <span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Quick:</span>
+        {emailCustomers.length > 0 && <button className="btn btn-secondary btn-sm" onClick={copyEmails}>{copied==="email"?<>{I.check} Copied!</>:<>{I.mail} Copy All {emailCustomers.length} Emails</>}</button>}
+        {smsCustomers.length > 0 && <button className="btn btn-secondary btn-sm" onClick={copySmsNumbers}>{copied==="sms"?<>{I.check} Copied!</>:<>{I.phone} Copy All {smsCustomers.length} SMS</>}</button>}
       </div>
     )}
 
-    {customers.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.users}</div><h3>No customers yet</h3><p style={{marginTop:8}}>Customers appear here when they place orders.</p></div>):(
-      <div className="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Preferred</th>{latestActiveDrop && <th>{latestActiveDrop.title.length > 20 ? latestActiveDrop.title.slice(0,20)+"…" : latestActiveDrop.title}</th>}<th>Orders</th><th>Total Spent</th><th></th></tr></thead><tbody>{customers.map(c=>{const cO=orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");const dropStatus=getDropOrderStatus(c.id);return(<tr key={c.id} style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><td style={{fontWeight:600}}>{c.name}</td><td><div style={{fontSize:13}}>{c.email}</div>{c.phone&&<div style={{fontSize:12,color:"var(--text-tertiary)"}}>{c.phone}</div>}</td><td><span className={`badge ${c.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`}>{c.prefer_contact==="sms"?"SMS":"Email"}</span></td>{latestActiveDrop && <td>{dropStatus===null?"":<span className={`badge ${dropStatus?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{dropStatus?"Ordered":"Not yet"}</span>}</td>}<td>{cO.length}</td><td style={{fontWeight:500}}>{fmt(cO.reduce((s,o)=>s+Number(o.total),0))}</td><td><span style={{color:"var(--text-tertiary)"}}>{I.history}</span></td></tr>)})}</tbody></table></div>
+    {/* Search */}
+    {customers.length > 3 && (
+      <div className="search-bar">{I.search}<input placeholder="Search customers by name, email, phone, or notes..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
     )}
 
-    {/* Summary: who hasn't ordered */}
+    {/* Bulk action bar */}
+    {selected.length > 0 && (
+      <div className="bulk-bar">
+        <div className="bulk-bar-count">{selected.length} selected</div>
+        <div className="bulk-bar-actions">
+          {selEmails.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>copySelected("email")}>{copied==="sel-email"?<>{I.check} Copied!</>:<>{I.mail} Copy {selEmails.length} Email{selEmails.length!==1?"s":""}</>}</button>}
+          {selSms.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>copySelected("sms")}>{copied==="sel-sms"?<>{I.check} Copied!</>:<>{I.phone} Copy {selSms.length} Phone{selSms.length!==1?"s":""}</>}</button>}
+          <button className="btn btn-ghost btn-sm" onClick={()=>setSelected([])}>Clear</button>
+        </div>
+      </div>
+    )}
+
+    {filtered.length===0 && customers.length > 0 ? (<div className="empty-state"><p>No customers match "{search}"</p></div>) :
+    filtered.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.users}</div><h3>No customers yet</h3><p style={{marginTop:8}}>Customers appear here when they place orders.</p></div>):(
+      <div className="table-wrap"><table><thead><tr><th style={{width:40}}><input type="checkbox" checked={selected.length===filtered.length&&filtered.length>0} onChange={toggleAll} style={{accentColor:"var(--accent)",width:16,height:16}}/></th><th>Name</th><th>Contact</th><th>Preferred</th>{latestActiveDrop && <th style={{maxWidth:120}}>{latestActiveDrop.title.length > 15 ? latestActiveDrop.title.slice(0,15)+"…" : latestActiveDrop.title}</th>}<th>Orders</th><th>Spent</th><th></th></tr></thead><tbody>{filtered.map(c=>{const cO=orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");const dropStatus=getDropOrderStatus(c.id);const isSelected=selected.includes(c.id);return(<tr key={c.id} style={{cursor:"pointer",background:isSelected?"var(--accent-light)":"transparent"}}><td onClick={e=>e.stopPropagation()}><input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(c.id)} style={{accentColor:"var(--accent)",width:16,height:16}}/></td><td onClick={()=>onSelectCustomer(c)}><div style={{fontWeight:600}}>{c.name}</div>{c.notes&&<div style={{fontSize:11,color:"var(--text-tertiary)",marginTop:2,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={c.notes}>📝 {c.notes}</div>}</td><td onClick={()=>onSelectCustomer(c)}><div style={{fontSize:13}}>{c.email}</div>{c.phone&&<div style={{fontSize:12,color:"var(--text-tertiary)"}}>{c.phone}</div>}</td><td onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`}>{c.prefer_contact==="sms"?"SMS":"Email"}</span></td>{latestActiveDrop && <td onClick={()=>onSelectCustomer(c)}>{dropStatus===null?"":<span className={`badge ${dropStatus?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{dropStatus?"Ordered":"Not yet"}</span>}</td>}<td onClick={()=>onSelectCustomer(c)}>{cO.length}</td><td onClick={()=>onSelectCustomer(c)} style={{fontWeight:500}}>{fmt(cO.reduce((s,o)=>s+Number(o.total),0))}</td><td><span style={{color:"var(--text-tertiary)"}}>{I.history}</span></td></tr>)})}</tbody></table></div>
+    )}
+
+    {/* Who hasn't ordered */}
     {latestActiveDrop && customers.length > 0 && (() => {
       const notOrdered = customers.filter(c => getDropOrderStatus(c.id) === false);
       if (notOrdered.length === 0) return null;
@@ -546,15 +599,10 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
       const notOrderedSms = notOrdered.filter(c => c.prefer_contact === "sms");
       return (
         <div className="card" style={{marginTop:20,borderLeft:"4px solid var(--gold)"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
-            <div>
-              <h3 style={{color:"var(--gold)"}}>Haven't ordered "{latestActiveDrop.title}" yet</h3>
-              <p style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>{notOrdered.length} customer{notOrdered.length!==1?"s":""} haven't placed an order for this drop.</p>
-            </div>
-          </div>
+          <div><h3 style={{color:"var(--gold)"}}>Haven't ordered "{latestActiveDrop.title}" yet</h3><p style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>{notOrdered.length} customer{notOrdered.length!==1?"s":""} haven't placed an order.</p></div>
           <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
             {notOrderedEmails.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>{navigator.clipboard?.writeText(notOrderedEmails.map(c=>c.email).join(", "));setCopied("nudge-email");setTimeout(()=>setCopied(null),2500)}}>{copied==="nudge-email"?<>{I.check} Copied!</>:<>{I.mail} Copy {notOrderedEmails.length} email{notOrderedEmails.length!==1?"s":""}</>}</button>}
-            {notOrderedSms.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>{navigator.clipboard?.writeText(notOrderedSms.map(c=>`${c.name}: ${c.phone}`).join("\n"));setCopied("nudge-sms");setTimeout(()=>setCopied(null),2500)}}>{copied==="nudge-sms"?<>{I.check} Copied!</>:<>{I.phone} Copy {notOrderedSms.length} SMS contact{notOrderedSms.length!==1?"s":""}</>}</button>}
+            {notOrderedSms.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>{navigator.clipboard?.writeText(notOrderedSms.map(c=>`${c.name}: ${c.phone}`).join("\n"));setCopied("nudge-sms");setTimeout(()=>setCopied(null),2500)}}>{copied==="nudge-sms"?<>{I.check} Copied!</>:<>{I.phone} Copy {notOrderedSms.length} SMS</>}</button>}
           </div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:12}}>{notOrdered.map(c=><span key={c.id} className="recipient-tag">{c.name} · {c.prefer_contact==="sms"?"SMS":"Email"}</span>)}</div>
         </div>
@@ -584,13 +632,22 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
             <button className="btn btn-danger btn-sm" onClick={()=>setConfirmDelete(true)}>Delete</button>
           ) : (
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <span style={{fontSize:12,color:"var(--red)"}}>Are you sure?</span>
-              <button className="btn btn-danger btn-sm" onClick={onDelete}>Yes, delete</button>
-              <button className="btn btn-ghost btn-sm" onClick={()=>setConfirmDelete(false)}>Cancel</button>
+              <span style={{fontSize:12,color:"var(--red)"}}>Sure?</span>
+              <button className="btn btn-danger btn-sm" onClick={onDelete}>Yes</button>
+              <button className="btn btn-ghost btn-sm" onClick={()=>setConfirmDelete(false)}>No</button>
             </div>
           )}
         </div>
       </div>
+
+      {/* Notes */}
+      {customer.notes && (
+        <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:12,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:4}}>Notes</div>
+          <div style={{fontSize:14,color:"var(--text-secondary)",whiteSpace:"pre-wrap"}}>{customer.notes}</div>
+        </div>
+      )}
+
       <div className="stats-row" style={{marginBottom:0}}>
         <div className="stat-card"><div className="stat-label">Total Orders</div><div className="stat-value">{nonCancelled.length}</div></div>
         <div className="stat-card"><div className="stat-label">Total Spent</div><div className="stat-value">{fmt(totalSpent)}</div></div>
@@ -658,15 +715,24 @@ function ImageUpload({ value, onChange, label }) {
 }
 
 // --- Drop Form (create + edit, with images) ---
-function DropFormModal({ mode, drop, existingItems, onSave, onClose }) {
-  const [title, setTitle] = useState(drop?.title || "");
-  const [desc, setDesc] = useState(drop?.description || "");
-  const [pickupDate, setPickupDate] = useState(drop?.pickup_date || "");
-  const [pickupTime, setPickupTime] = useState(drop?.pickup_time || "");
-  const [pickupLocation, setPickupLocation] = useState(drop?.pickup_location || "");
-  const [imageUrl, setImageUrl] = useState(drop?.image_url || "");
+function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, onSave, onClose }) {
+  const src = drop || duplicateFrom;
+  const srcItems = existingItems || duplicateItems;
+  const [title, setTitle] = useState(duplicateFrom ? "" : (src?.title || ""));
+  const [desc, setDesc] = useState(src?.description || "");
+  const [pickupDate, setPickupDate] = useState(duplicateFrom ? "" : (src?.pickup_date || ""));
+  const [pickupTime, setPickupTime] = useState(src?.pickup_time || "");
+  const [pickupLocation, setPickupLocation] = useState(src?.pickup_location || "");
+  const [imageUrl, setImageUrl] = useState(src?.image_url || "");
   const [items, setItems] = useState(() => {
-    if (existingItems?.length) return existingItems.map(i => ({ id: i.id, existingId: i.id, name: i.name, price: String(i.price), quantity: i.quantity===-1?"":String(i.quantity), unlimited: i.quantity===-1, sortOrder: i.sort_order, imageUrl: i.image_url||"" }));
+    if (srcItems?.length) return srcItems.map(i => ({
+      id: duplicateFrom ? `dup${i.id}` : i.id,
+      existingId: duplicateFrom ? undefined : i.id,
+      name: i.name, price: String(i.price),
+      quantity: i.quantity===-1?"":String(i.quantity),
+      unlimited: i.quantity===-1, sortOrder: i.sort_order,
+      imageUrl: i.image_url||""
+    }));
     return [{ id: "i0", name: "", price: "", quantity: "", unlimited: false, imageUrl: "" }];
   });
   const [saving, setSaving] = useState(false);
@@ -678,7 +744,7 @@ function DropFormModal({ mode, drop, existingItems, onSave, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-header"><h2>{mode==="edit"?"Edit Drop":"Create New Drop"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <div className="modal-header"><h2>{mode==="edit"?"Edit Drop":duplicateFrom?"Duplicate Drop":"Create New Drop"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Drop Title</label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
       <ImageUpload value={imageUrl} onChange={setImageUrl} label="Drop Cover Image (optional)"/>
@@ -743,10 +809,10 @@ function EditOrderModal({ order, dropItems, existingOrderItems, onSave, onClose 
 
 // --- Customer Form ---
 function CustomerFormModal({ mode, customer, onSave, onClose }) {
-  const [name, setName] = useState(customer?.name||""); const [email, setEmail] = useState(customer?.email||""); const [phone, setPhone] = useState(customer?.phone||""); const [prefer, setPrefer] = useState(customer?.prefer_contact||"email");
+  const [name, setName] = useState(customer?.name||""); const [email, setEmail] = useState(customer?.email||""); const [phone, setPhone] = useState(customer?.phone||""); const [prefer, setPrefer] = useState(customer?.prefer_contact||"email"); const [notes, setNotes] = useState(customer?.notes||"");
   const [saving, setSaving] = useState(false);
   const canSave = name && email && !saving;
-  const handleSave = async () => { setSaving(true); await onSave({ name, email, phone, preferContact: prefer }); setSaving(false); };
+  const handleSave = async () => { setSaving(true); await onSave({ name, email, phone, preferContact: prefer, notes }); setSaving(false); };
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="modal-header"><h2>{mode==="edit"?"Edit Customer":"Add Customer"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
@@ -754,6 +820,7 @@ function CustomerFormModal({ mode, customer, onSave, onClose }) {
       <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="email@example.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="555-0100" value={phone} onChange={e=>setPhone(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Preferred Contact</label><select className="form-select" value={prefer} onChange={e=>setPrefer(e.target.value)}><option value="email">Email</option><option value="sms">SMS / Text</option></select></div>
+      <div className="form-group"><label className="form-label">Notes (optional)</label><textarea className="form-textarea" rows={3} placeholder="Allergies, preferences, special requests..." value={notes} onChange={e=>setNotes(e.target.value)}/><div className="form-hint">Only visible to you, not the customer</div></div>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Add Customer")}</button>
     </div></div>
   );
