@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v8 — Toggle pickup, CSV import, drops-per-customer, signup form
+// FOODDROP MVP v9 — Column toggles, printable prep, pickup checklist
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -76,6 +76,9 @@ const I = {
   copy: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
   upload: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
   undo: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>,
+  print: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
+  listCheck: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h11"/><path d="M3 6l2 2 4-4M3 18l2 2 4-4"/><rect x="3" y="10" width="4" height="4" rx="1"/></svg>,
+  columns: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>,
   image: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
   chart: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
 };
@@ -142,6 +145,11 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 .drops-cell{position:relative}.drops-toggle{cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--accent);padding:2px 8px;background:var(--accent-light);border-radius:12px;border:none;font-family:var(--font-body)}.drops-toggle:hover{background:#ffe0d5}.drops-expand{position:absolute;top:100%;left:0;z-index:10;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);padding:8px;min-width:200px;margin-top:4px}.drops-expand-item{font-size:12px;padding:4px 8px;border-radius:4px;white-space:nowrap}.drops-expand-item:hover{background:var(--surface-alt)}
 .import-preview{border:1px solid var(--border);border-radius:var(--radius-sm);overflow:auto;max-height:300px;margin:16px 0}.import-preview table{font-size:13px}.import-preview th{padding:8px 12px;font-size:11px}.import-preview td{padding:6px 12px;font-size:13px}
 .signup-section{margin-top:32px;padding-top:32px;border-top:1px solid var(--border)}.signup-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:28px;max-width:480px;margin:0 auto}
+
+.col-toggle-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}.col-toggle-label{font-size:12px;font-weight:600;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.3px;margin-right:4px}.col-toggle{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:4px;transition:background .1s}.col-toggle:hover{background:var(--surface-alt)}.col-toggle input{accent-color:var(--accent);width:14px;height:14px}
+.pickup-list{display:grid;gap:8px}.pickup-item{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);transition:all .15s}.pickup-item.checked{background:var(--green-light);border-color:#b7e4c7}.pickup-item-check{width:24px;height:24px;border:2px solid var(--border-strong);border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;flex-shrink:0}.pickup-item-check.checked{background:var(--green);border-color:var(--green);color:#fff}.pickup-item-info{flex:1}.pickup-item-name{font-weight:600;font-size:15px}.pickup-item-items{font-size:13px;color:var(--text-secondary);margin-top:2px}.pickup-item-total{font-weight:600;font-size:14px;flex-shrink:0}
+.view-tabs{display:flex;gap:4px;margin-bottom:20px;background:var(--surface-alt);border-radius:var(--radius-sm);padding:4px}.view-tab{flex:1;text-align:center;padding:10px 16px;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;border:none;background:transparent;font-family:var(--font-body);color:var(--text-secondary);transition:all .15s}.view-tab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
+@media print{.creator-topbar,.creator-nav,.btn,.view-tabs,.section-header .btn{display:none!important}.main-content{padding:0!important;max-width:100%!important}}
 
 `;
 
@@ -482,12 +490,25 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
 // DROP DETAIL — with archive, edit order buttons
 // ============================================================
 function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customers, onBack, onUpdateOrderStatus, onEndDrop, onEditDrop, onArchiveDrop, onEditOrder, onDuplicate }) {
-  const dI=getDropItems(drop.id); const dO=getDropOrders(drop.id); const rev=dO.filter(o=>o.status!=="cancelled").reduce((s,o)=>s+Number(o.total),0);
-  const prep=dI.map(item=>{const tot=dO.filter(o=>o.status!=="cancelled").reduce((sum,order)=>{const ois=getOrderItems(order.id);const oi=ois.find(i=>i.drop_item_id===item.id);return sum+(oi?oi.quantity:0)},0);return{...item,totalOrdered:tot}});
+  const [view, setView] = useState("summary");
+  const [pickedUpLocal, setPickedUpLocal] = useState({});
+  const dI=getDropItems(drop.id); const dO=getDropOrders(drop.id); const activeDO=dO.filter(o=>o.status!=="cancelled"); const rev=activeDO.reduce((s,o)=>s+Number(o.total),0);
+  const prep=dI.map(item=>{const tot=activeDO.reduce((sum,order)=>{const ois=getOrderItems(order.id);const oi=ois.find(i=>i.drop_item_id===item.id);return sum+(oi?oi.quantity:0)},0);return{...item,totalOrdered:tot}});
+
+  const handlePrint = () => window.print();
+
+  // Pickup checklist uses local state for instant toggling + syncs to DB
+  const togglePickup = async (orderId, currentStatus) => {
+    const newStatus = currentStatus === "picked_up" ? "confirmed" : "picked_up";
+    setPickedUpLocal(p => ({...p, [orderId]: newStatus}));
+    await onUpdateOrderStatus(orderId, newStatus);
+  };
+
+  const getOrderStatus = (order) => pickedUpLocal[order.id] || order.status;
 
   return (<>
     <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}>{I.back} Back to Drops</button>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:28,flexWrap:"wrap",gap:12}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
       <div>
         {drop.image_url && <img src={drop.image_url} alt="" style={{width:"100%",maxWidth:400,height:160,objectFit:"cover",borderRadius:"var(--radius-sm)",marginBottom:12}}/>}
         <h1>{drop.title}</h1>
@@ -498,18 +519,63 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
         <button className="btn btn-secondary btn-sm" onClick={onDuplicate}>{I.copy} Duplicate</button>
         <span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>
         {drop.status==="active"&&<button className="btn btn-danger btn-sm" onClick={()=>onEndDrop(drop.id)}>End Drop</button>}
-        <button className="btn btn-ghost btn-sm" onClick={onArchiveDrop} title="Archive this drop">{I.archive} Archive</button>
+        <button className="btn btn-ghost btn-sm" onClick={onArchiveDrop}>{I.archive} Archive</button>
       </div>
     </div>
-    <div className="stats-row"><div className="stat-card"><div className="stat-label">Orders</div><div className="stat-value">{dO.filter(o=>o.status!=="cancelled").length}</div></div><div className="stat-card"><div className="stat-label">Revenue</div><div className="stat-value">{fmt(rev)}</div><div className="stat-sub">Cash to collect</div></div></div>
 
-    <div style={{marginBottom:32}}><div className="section-header"><h2>🧑‍🍳 Prep Summary</h2></div><div className="prep-grid">{prep.map(item=>(<div key={item.id} className="prep-item"><div style={{display:"flex",alignItems:"center",gap:12}}>{item.image_url&&<img src={item.image_url} alt="" style={{width:48,height:48,borderRadius:8,objectFit:"cover"}}/>}<div><div className="prep-item-name">{item.name}</div><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{fmt(item.price)} each · {item.quantity>0?`${item.quantity-item.totalOrdered} remaining of ${item.quantity}`:"Unlimited"}</div>{item.quantity>0&&<div className="progress-bar" style={{width:160,marginTop:8}}><div className={`progress-fill ${item.totalOrdered>=item.quantity?"full":""}`} style={{width:`${Math.min((item.totalOrdered/item.quantity)*100,100)}%`}}/></div>}</div></div><div className="prep-item-count">{item.totalOrdered}</div></div>))}</div></div>
+    <div className="stats-row"><div className="stat-card"><div className="stat-label">Orders</div><div className="stat-value">{activeDO.length}</div></div><div className="stat-card"><div className="stat-label">Revenue</div><div className="stat-value">{fmt(rev)}</div><div className="stat-sub">Cash to collect</div></div><div className="stat-card"><div className="stat-label">Picked Up</div><div className="stat-value">{dO.filter(o=>getOrderStatus(o)==="picked_up").length}/{activeDO.length}</div></div></div>
 
-    <div style={{marginBottom:32}}><div className="section-header"><h2>Orders</h2></div>
+    {/* View Tabs */}
+    <div className="view-tabs">
+      <button className={`view-tab ${view==="summary"?"active":""}`} onClick={()=>setView("summary")}>🧑‍🍳 Prep Summary</button>
+      <button className={`view-tab ${view==="orders"?"active":""}`} onClick={()=>setView("orders")}>📋 Orders</button>
+      <button className={`view-tab ${view==="pickup"?"active":""}`} onClick={()=>setView("pickup")}>{I.listCheck} Pickup Checklist</button>
+    </div>
+
+    {/* Prep Summary View */}
+    {view==="summary"&&(<div className="page-enter">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>Prep Summary</h2><button className="btn btn-secondary btn-sm" onClick={handlePrint}>{I.print} Print</button></div>
+      <div className="prep-grid">{prep.map(item=>(<div key={item.id} className="prep-item"><div style={{display:"flex",alignItems:"center",gap:12}}>{item.image_url&&<img src={item.image_url} alt="" style={{width:48,height:48,borderRadius:8,objectFit:"cover"}}/>}<div><div className="prep-item-name">{item.name}</div><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{fmt(item.price)} each · {item.quantity>0?`${item.quantity-item.totalOrdered} remaining of ${item.quantity}`:"Unlimited"}</div>{item.quantity>0&&<div className="progress-bar" style={{width:160,marginTop:8}}><div className={`progress-fill ${item.totalOrdered>=item.quantity?"full":""}`} style={{width:`${Math.min((item.totalOrdered/item.quantity)*100,100)}%`}}/></div>}</div></div><div className="prep-item-count">{item.totalOrdered}</div></div>))}</div>
+    </div>)}
+
+    {/* Orders View */}
+    {view==="orders"&&(<div className="page-enter">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>All Orders</h2></div>
       {dO.length===0?<div className="empty-state"><p>No orders yet.</p></div>:(
         <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);return(<tr key={order.id}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td><td style={{fontWeight:600}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span></td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
       )}
-    </div>
+    </div>)}
+
+    {/* Pickup Checklist View */}
+    {view==="pickup"&&(<div className="page-enter">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>Pickup Checklist</h2><button className="btn btn-secondary btn-sm" onClick={handlePrint}>{I.print} Print</button></div>
+      <p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16}}>Tap to check off customers as they pick up their orders.</p>
+      {activeDO.length===0?<div className="empty-state"><p>No orders to check off.</p></div>:(
+        <div className="pickup-list">
+          {activeDO.map(order => {
+            const cust = customers.find(c => c.id === order.customer_id);
+            const ois = getOrderItems(order.id);
+            const status = getOrderStatus(order);
+            const isChecked = status === "picked_up";
+            return (
+              <div key={order.id} className={`pickup-item ${isChecked?"checked":""}`}>
+                <div className={`pickup-item-check ${isChecked?"checked":""}`} onClick={()=>togglePickup(order.id, status)}>
+                  {isChecked && <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>}
+                </div>
+                <div className="pickup-item-info">
+                  <div className="pickup-item-name" style={{textDecoration:isChecked?"line-through":"none",opacity:isChecked?.6:1}}>{cust?.name||order.customer_name||"Guest"}</div>
+                  <div className="pickup-item-items">{ois.map(oi=>`${oi.quantity}× ${oi.item_name}`).join(", ")}</div>
+                </div>
+                <div className="pickup-item-total" style={{opacity:isChecked?.6:1}}>{fmt(order.total)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{marginTop:16,padding:12,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",fontSize:13,color:"var(--text-secondary)",textAlign:"center"}}>
+        {dO.filter(o=>getOrderStatus(o)==="picked_up").length} of {activeDO.length} picked up · {fmt(activeDO.filter(o=>getOrderStatus(o)==="picked_up").reduce((s,o)=>s+Number(o.total),0))} collected
+      </div>
+    </div>)}
   </>);
 }
 
@@ -521,6 +587,9 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState([]);
   const [expandedDrops, setExpandedDrops] = useState(null);
+  const [showColPanel, setShowColPanel] = useState(false);
+  const [cols, setCols] = useState({ contact: true, pref: true, drops: true, activeDrop: true, orders: true, spent: true, notes: false, since: false, optedIn: false });
+  const toggleCol = (key) => setCols(p => ({...p, [key]: !p[key]}));
   const activeDrops = drops.filter(d => d.status === "active" && !d.archived);
   const latestActiveDrop = activeDrops[0];
   const nonArchivedDrops = drops.filter(d => !d.archived);
@@ -579,6 +648,21 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
 
     {customers.length > 3 && <div className="search-bar">{I.search}<input placeholder="Search by name, email, phone, or notes..." value={search} onChange={e=>setSearch(e.target.value)}/></div>}
 
+    {/* Column toggle */}
+    {customers.length > 0 && (
+      <div style={{marginBottom:12}}>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setShowColPanel(!showColPanel)}>{I.columns} {showColPanel?"Hide":"Show"} Columns</button>
+        {showColPanel && (
+          <div className="col-toggle-panel" style={{marginTop:8}}>
+            <span className="col-toggle-label">Show:</span>
+            {[{key:"contact",label:"Contact Info"},{key:"pref",label:"Preferred"},{key:"drops",label:"Drops"},{key:"activeDrop",label:"Active Drop Status"},{key:"orders",label:"Order Count"},{key:"spent",label:"Total Spent"},{key:"notes",label:"Notes"},{key:"since",label:"Customer Since"},{key:"optedIn",label:"Opted In"}].map(col=>(
+              <label key={col.key} className="col-toggle"><input type="checkbox" checked={cols[col.key]} onChange={()=>toggleCol(col.key)}/>{col.label}</label>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
     {selected.length > 0 && (
       <div className="bulk-bar"><div className="bulk-bar-count">{selected.length} selected</div><div className="bulk-bar-actions">
         {selEmails.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>copySelected("email")}>{copied==="sel-email"?<>{I.check} Copied!</>:<>{I.mail} {selEmails.length} Email{selEmails.length!==1?"s":""}</>}</button>}
@@ -589,7 +673,7 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
 
     {filtered.length===0 && customers.length > 0 ? (<div className="empty-state"><p>No customers match "{search}"</p></div>) :
     filtered.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.users}</div><h3>No customers yet</h3><p style={{marginTop:8}}>Add customers manually, import from CSV, or they'll appear when they place orders.</p></div>):(
-      <div className="table-wrap"><table><thead><tr><th style={{width:40}}><input type="checkbox" checked={selected.length===filtered.length&&filtered.length>0} onChange={toggleAll} style={{accentColor:"var(--accent)",width:16,height:16}}/></th><th>Name</th><th>Contact</th><th>Pref</th><th>Drops</th>{latestActiveDrop && <th style={{maxWidth:100}}>{latestActiveDrop.title.length > 12 ? latestActiveDrop.title.slice(0,12)+"…" : latestActiveDrop.title}</th>}<th>Orders</th><th>Spent</th></tr></thead><tbody>{filtered.map(c=>{const cO=orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");const dropStatus=getDropOrderStatus(c.id);const custDrops=getCustomerDrops(c.id);const isSelected=selected.includes(c.id);const isExpanded=expandedDrops===c.id;return(<tr key={c.id} style={{background:isSelected?"var(--accent-light)":"transparent"}}><td onClick={e=>e.stopPropagation()}><input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(c.id)} style={{accentColor:"var(--accent)",width:16,height:16}}/></td><td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontWeight:600}}>{c.name}</div>{c.notes&&<div style={{fontSize:11,color:"var(--text-tertiary)",marginTop:2,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={c.notes}>📝 {c.notes}</div>}</td><td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontSize:13}}>{c.email}</div>{c.phone&&<div style={{fontSize:12,color:"var(--text-tertiary)"}}>{c.phone}</div>}</td><td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`} style={{fontSize:11}}>{c.prefer_contact==="sms"?"SMS":"Email"}</span></td><td className="drops-cell" onClick={e=>e.stopPropagation()}>{custDrops.length===0?<span style={{fontSize:12,color:"var(--text-tertiary)"}}>—</span>:<><button className="drops-toggle" onClick={()=>setExpandedDrops(isExpanded?null:c.id)}>{custDrops.length} drop{custDrops.length!==1?"s":""} {isExpanded?"▴":"▾"}</button>{isExpanded&&<div className="drops-expand">{custDrops.map(d=><div key={d.id} className="drops-expand-item">{d.title} · {fmtDate(d.pickup_date)}</div>)}</div>}</>}</td>{latestActiveDrop&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{dropStatus===null?"":<span className={`badge ${dropStatus?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{dropStatus?"Ordered":"Not yet"}</span>}</td>}<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{cO.length}</td><td style={{cursor:"pointer",fontWeight:500}} onClick={()=>onSelectCustomer(c)}>{fmt(cO.reduce((s,o)=>s+Number(o.total),0))}</td></tr>)})}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th style={{width:40}}><input type="checkbox" checked={selected.length===filtered.length&&filtered.length>0} onChange={toggleAll} style={{accentColor:"var(--accent)",width:16,height:16}}/></th><th>Name</th>{cols.contact&&<th>Contact</th>}{cols.pref&&<th>Pref</th>}{cols.drops&&<th>Drops</th>}{cols.activeDrop&&latestActiveDrop&&<th style={{maxWidth:100}}>{latestActiveDrop.title.length > 12 ? latestActiveDrop.title.slice(0,12)+"…" : latestActiveDrop.title}</th>}{cols.orders&&<th>Orders</th>}{cols.spent&&<th>Spent</th>}{cols.since&&<th>Since</th>}{cols.optedIn&&<th>Opted In</th>}</tr></thead><tbody>{filtered.map(c=>{const cO=orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");const dropStatus=getDropOrderStatus(c.id);const custDrops=getCustomerDrops(c.id);const isSelected=selected.includes(c.id);const isExpanded=expandedDrops===c.id;return(<tr key={c.id} style={{background:isSelected?"var(--accent-light)":"transparent"}}><td onClick={e=>e.stopPropagation()}><input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(c.id)} style={{accentColor:"var(--accent)",width:16,height:16}}/></td><td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontWeight:600}}>{c.name}</div>{cols.notes&&c.notes&&<div style={{fontSize:11,color:"var(--text-tertiary)",marginTop:2,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={c.notes}>📝 {c.notes}</div>}</td>{cols.contact&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontSize:13}}>{c.email}</div>{c.phone&&<div style={{fontSize:12,color:"var(--text-tertiary)"}}>{c.phone}</div>}</td>}{cols.pref&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`} style={{fontSize:11}}>{c.prefer_contact==="sms"?"SMS":"Email"}</span></td>}{cols.drops&&<td className="drops-cell" onClick={e=>e.stopPropagation()}>{custDrops.length===0?<span style={{fontSize:12,color:"var(--text-tertiary)"}}>—</span>:<><button className="drops-toggle" onClick={()=>setExpandedDrops(isExpanded?null:c.id)}>{custDrops.length} drop{custDrops.length!==1?"s":""} {isExpanded?"▴":"▾"}</button>{isExpanded&&<div className="drops-expand">{custDrops.map(d=><div key={d.id} className="drops-expand-item">{d.title} · {fmtDate(d.pickup_date)}</div>)}</div>}</>}</td>}{cols.activeDrop&&latestActiveDrop&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{dropStatus===null?"":<span className={`badge ${dropStatus?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{dropStatus?"Ordered":"Not yet"}</span>}</td>}{cols.orders&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{cO.length}</td>}{cols.spent&&<td style={{cursor:"pointer",fontWeight:500}} onClick={()=>onSelectCustomer(c)}>{fmt(cO.reduce((s,o)=>s+Number(o.total),0))}</td>}{cols.since&&<td style={{cursor:"pointer",fontSize:12}} onClick={()=>onSelectCustomer(c)}>{c.created_at?fmtDate(c.created_at.slice(0,10)):"—"}</td>}{cols.optedIn&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.opted_in!==false?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{c.opted_in!==false?"Yes":"No"}</span></td>}</tr>)})}</tbody></table></div>
     )}
 
     {latestActiveDrop && customers.length > 0 && (() => {
