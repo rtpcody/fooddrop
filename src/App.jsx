@@ -258,8 +258,24 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const handleImportCustomers = async (rows) => {
     if (!creator) return;
     const inserts = rows.map(r => ({ creator_id: creator.id, name: r.name, email: r.email, phone: r.phone || "", prefer_contact: r.prefer_contact || "email", notes: r.notes || "", opted_in: true }));
+    // Try bulk insert first
     const { error } = await supabase.from("customers").insert(inserts).execute();
-    if (error) { showToast("Import failed", "error"); return; }
+    if (error) {
+      console.error("Bulk import error:", error);
+      // Fallback: try one at a time to identify bad rows
+      let successCount = 0;
+      for (const row of inserts) {
+        const { error: rowErr } = await supabase.from("customers").insert(row).execute();
+        if (!rowErr) successCount++;
+        else console.error("Row failed:", row.name, row.email, rowErr);
+      }
+      if (successCount > 0) {
+        setShowImportCSV(false); showToast(`${successCount} of ${rows.length} imported (some rows had issues).`); loadData();
+      } else {
+        showToast(`Import failed: ${error.message || "Unknown error. Check browser console for details."}`, "error");
+      }
+      return;
+    }
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
   const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated!"); loadData(); };
