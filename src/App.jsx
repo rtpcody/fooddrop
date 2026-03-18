@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v9 — Column toggles, printable prep, pickup checklist
+// FOODDROP MVP v10 — Creator slugs, multi-creator routing, split contact columns
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -154,12 +154,23 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 `;
 
 // ============================================================
-// ROUTING
+// ROUTING — Hash-based with creator slugs
 // ============================================================
+// Routes: #/slug = customer page, #/slug/admin = creator admin, #/ = landing
 function useRoute() {
   const [hash, setHash] = useState(window.location.hash || "#/");
   useEffect(() => { const h = () => setHash(window.location.hash || "#/"); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
   return hash;
+}
+
+function parseRoute(hash) {
+  const path = hash.replace("#/", "").replace(/\/$/, "");
+  if (!path) return { slug: null, isAdmin: false };
+  const parts = path.split("/");
+  if (parts.length >= 2 && parts[parts.length - 1] === "admin") {
+    return { slug: parts.slice(0, -1).join("/"), isAdmin: true };
+  }
+  return { slug: parts.join("/"), isAdmin: false };
 }
 
 // ============================================================
@@ -167,6 +178,8 @@ function useRoute() {
 // ============================================================
 export default function FoodDropApp() {
   const route = useRoute();
+  const { slug, isAdmin } = parseRoute(route);
+  const [allCreators, setAllCreators] = useState([]);
   const [creator, setCreator] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [drops, setDrops] = useState([]);
@@ -182,27 +195,77 @@ export default function FoodDropApp() {
 
   const loadData = useCallback(async () => {
     try {
-      const [cRes, custRes, dropsRes, diRes, ordRes, oiRes] = await Promise.all([
-        supabase.from("creators").select("*").execute(),
-        supabase.from("customers").select("*").order("created_at", { ascending: false }).execute(),
-        supabase.from("drops").select("*").order("created_at", { ascending: false }).execute(),
-        supabase.from("drop_items").select("*").order("sort_order").execute(),
-        supabase.from("orders").select("*").order("created_at", { ascending: false }).execute(),
-        supabase.from("order_items").select("*").execute(),
-      ]);
-      if (cRes.error || custRes.error || dropsRes.error) { setDbOk(false); setLoading(false); return; }
-      setCreator(cRes.data?.[0] || null); setCustomers(custRes.data || []); setDrops(dropsRes.data || []); setDropItems(diRes.data || []); setOrders(ordRes.data || []); setOrderItems(oiRes.data || []); setDbOk(true);
+      const cRes = await supabase.from("creators").select("*").execute();
+      if (cRes.error) { setDbOk(false); setLoading(false); return; }
+      const creators = cRes.data || [];
+      setAllCreators(creators);
+
+      // Find creator by slug
+      let activeCreator = null;
+      if (slug) {
+        activeCreator = creators.find(c => c.slug === slug);
+      }
+      // Fallback: if no slug or slug not found, use first creator (backward compat)
+      if (!activeCreator && creators.length === 1 && !slug) {
+        activeCreator = creators[0];
+      }
+      setCreator(activeCreator);
+
+      if (activeCreator) {
+        const [custRes, dropsRes, diRes, ordRes, oiRes] = await Promise.all([
+          supabase.from("customers").select("*").eq("creator_id", activeCreator.id).order("created_at", { ascending: false }).execute(),
+          supabase.from("drops").select("*").eq("creator_id", activeCreator.id).order("created_at", { ascending: false }).execute(),
+          supabase.from("drop_items").select("*").order("sort_order").execute(),
+          supabase.from("orders").select("*").order("created_at", { ascending: false }).execute(),
+          supabase.from("order_items").select("*").execute(),
+        ]);
+        setCustomers(custRes.data || []);
+        const creatorDrops = dropsRes.data || [];
+        setDrops(creatorDrops);
+        const dropIds = creatorDrops.map(d => d.id);
+        setDropItems((diRes.data || []).filter(di => dropIds.includes(di.drop_id)));
+        const creatorOrders = (ordRes.data || []).filter(o => dropIds.includes(o.drop_id));
+        setOrders(creatorOrders);
+        const orderIds = creatorOrders.map(o => o.id);
+        setOrderItems((oiRes.data || []).filter(oi => orderIds.includes(oi.order_id)));
+      } else {
+        setCustomers([]); setDrops([]); setDropItems([]); setOrders([]); setOrderItems([]);
+      }
+      setDbOk(true);
     } catch { setDbOk(false); }
     setLoading(false);
-  }, []);
+  }, [slug]);
 
   useEffect(() => { loadData(); }, [loadData]);
   const getDropItems = useCallback((id) => dropItems.filter((di) => di.drop_id === id), [dropItems]);
   const getDropOrders = useCallback((id) => orders.filter((o) => o.drop_id === id), [orders]);
   const getOrderItems = useCallback((id) => orderItems.filter((oi) => oi.order_id === id), [orderItems]);
-  const isAdmin = route.startsWith("#/admin");
 
   if (loading) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
+
+  // Landing page — no slug provided
+  if (!slug && !creator) {
+    return (
+      <><style>{CSS}</style><div className="app">
+        {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
+        <LandingPage creators={allCreators}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  // Creator not found
+  if (slug && !creator) {
+    return (
+      <><style>{CSS}</style><div className="app">
+        <div className="loading-screen" style={{color:"var(--text)"}}>
+          <h2>Page not found</h2>
+          <p style={{color:"var(--text-secondary)"}}>No creator found at this URL.</p>
+          <a href="#/" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>← Go Home</a>
+        </div>
+      </div></>
+    );
+  }
 
   return (
     <><style>{CSS}</style><div className="app">
@@ -210,6 +273,33 @@ export default function FoodDropApp() {
       {isAdmin ? <CreatorDashboard creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} showToast={showToast} loadData={loadData}/> : <CustomerStorefront creator={creator} drops={drops} getDropItems={getDropItems} showToast={showToast} loadData={loadData} customers={customers}/>}
       {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
     </div></>
+  );
+}
+
+// ============================================================
+// LANDING PAGE
+// ============================================================
+function LandingPage({ creators }) {
+  return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{textAlign:"center",maxWidth:480}}>
+        <div style={{fontSize:48,marginBottom:16}}>🍽️</div>
+        <h1 style={{marginBottom:8}}>FoodDrop</h1>
+        <p style={{color:"var(--text-secondary)",fontSize:16,marginBottom:32}}>The platform for food creators to manage drops, customers, and orders.</p>
+        {creators.length > 0 && (<>
+          <h3 style={{marginBottom:12,color:"var(--text-secondary)"}}>Active Creators</h3>
+          <div style={{display:"grid",gap:12}}>
+            {creators.filter(c=>c.slug).map(c => (
+              <a key={c.id} href={`#/${c.slug}`} className="card card-hover" style={{textDecoration:"none",color:"var(--text)",textAlign:"left"}}>
+                <h3>{c.name || "Unnamed Creator"}</h3>
+                {c.tagline && <p style={{fontSize:14,color:"var(--text-secondary)",marginTop:4}}>{c.tagline}</p>}
+                <div style={{fontSize:12,color:"var(--accent)",marginTop:8}}>Visit page →</div>
+              </a>
+            ))}
+          </div>
+        </>)}
+      </div>
+    </div>
   );
 }
 
@@ -230,7 +320,8 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [showRevenue, setShowRevenue] = useState(false);
   const [duplicateDrop, setDuplicateDrop] = useState(null);
   const [showImportCSV, setShowImportCSV] = useState(false);
-  const customerUrl = window.location.origin + window.location.pathname;
+  const customerUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}`;
+  const adminUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}/admin`;
 
   const handleCreateDrop = async (d, items) => {
     if (!creator) return;
@@ -278,7 +369,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     }
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
-  const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated!"); loadData(); };
+  const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline, slug: d.slug }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated! Slug changes take effect on reload."); loadData(); };
   const handleUpdateOrderStatus = async (oid, status) => { await supabase.from("orders").update({ status }).eq("id", oid).execute(); showToast(`Order marked as ${status.replace("_"," ")}.`); loadData(); };
   const handleEndDrop = async (id) => { await supabase.from("drops").update({ status: "ended" }).eq("id", id).execute(); showToast("Drop ended."); setSelectedDrop(null); loadData(); };
   const handleArchiveDrop = async (id) => { await supabase.from("drops").update({ archived: true }).eq("id", id).execute(); showToast("Drop archived."); setSelectedDrop(null); loadData(); };
@@ -604,7 +695,7 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
   const [selected, setSelected] = useState([]);
   const [expandedDrops, setExpandedDrops] = useState(null);
   const [showColPanel, setShowColPanel] = useState(false);
-  const [cols, setCols] = useState({ contact: true, pref: true, drops: true, activeDrop: true, orders: true, spent: true, notes: false, since: false, optedIn: false });
+  const [cols, setCols] = useState({ email: true, phone: true, pref: true, drops: true, activeDrop: true, orders: true, spent: true, notes: false, since: false, optedIn: false });
   const toggleCol = (key) => setCols(p => ({...p, [key]: !p[key]}));
   const activeDrops = drops.filter(d => d.status === "active" && !d.archived);
   const latestActiveDrop = activeDrops[0];
@@ -671,7 +762,7 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
         {showColPanel && (
           <div className="col-toggle-panel" style={{marginTop:8}}>
             <span className="col-toggle-label">Show:</span>
-            {[{key:"contact",label:"Contact Info"},{key:"pref",label:"Preferred"},{key:"drops",label:"Drops"},{key:"activeDrop",label:"Active Drop Status"},{key:"orders",label:"Order Count"},{key:"spent",label:"Total Spent"},{key:"notes",label:"Notes"},{key:"since",label:"Customer Since"},{key:"optedIn",label:"Opted In"}].map(col=>(
+            {[{key:"email",label:"Email"},{key:"phone",label:"Phone"},{key:"pref",label:"Preferred"},{key:"drops",label:"Drops"},{key:"activeDrop",label:"Active Drop Status"},{key:"orders",label:"Order Count"},{key:"spent",label:"Total Spent"},{key:"notes",label:"Notes"},{key:"since",label:"Customer Since"},{key:"optedIn",label:"Opted In"}].map(col=>(
               <label key={col.key} className="col-toggle"><input type="checkbox" checked={cols[col.key]} onChange={()=>toggleCol(col.key)}/>{col.label}</label>
             ))}
           </div>
@@ -689,7 +780,7 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
 
     {filtered.length===0 && customers.length > 0 ? (<div className="empty-state"><p>No customers match "{search}"</p></div>) :
     filtered.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.users}</div><h3>No customers yet</h3><p style={{marginTop:8}}>Add customers manually, import from CSV, or they'll appear when they place orders.</p></div>):(
-      <div className="table-wrap"><table><thead><tr><th style={{width:40}}><input type="checkbox" checked={selected.length===filtered.length&&filtered.length>0} onChange={toggleAll} style={{accentColor:"var(--accent)",width:16,height:16}}/></th><th>Name</th>{cols.contact&&<th>Contact</th>}{cols.pref&&<th>Pref</th>}{cols.drops&&<th>Drops</th>}{cols.activeDrop&&latestActiveDrop&&<th style={{maxWidth:100}}>{latestActiveDrop.title.length > 12 ? latestActiveDrop.title.slice(0,12)+"…" : latestActiveDrop.title}</th>}{cols.orders&&<th>Orders</th>}{cols.spent&&<th>Spent</th>}{cols.since&&<th>Since</th>}{cols.optedIn&&<th>Opted In</th>}</tr></thead><tbody>{filtered.map(c=>{const cO=orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");const dropStatus=getDropOrderStatus(c.id);const custDrops=getCustomerDrops(c.id);const isSelected=selected.includes(c.id);const isExpanded=expandedDrops===c.id;return(<tr key={c.id} style={{background:isSelected?"var(--accent-light)":"transparent"}}><td onClick={e=>e.stopPropagation()}><input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(c.id)} style={{accentColor:"var(--accent)",width:16,height:16}}/></td><td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontWeight:600}}>{c.name}</div>{cols.notes&&c.notes&&<div style={{fontSize:11,color:"var(--text-tertiary)",marginTop:2,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={c.notes}>📝 {c.notes}</div>}</td>{cols.contact&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontSize:13}}>{c.email}</div>{c.phone&&<div style={{fontSize:12,color:"var(--text-tertiary)"}}>{c.phone}</div>}</td>}{cols.pref&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`} style={{fontSize:11}}>{c.prefer_contact==="sms"?"SMS":"Email"}</span></td>}{cols.drops&&<td className="drops-cell" onClick={e=>e.stopPropagation()}>{custDrops.length===0?<span style={{fontSize:12,color:"var(--text-tertiary)"}}>—</span>:<><button className="drops-toggle" onClick={()=>setExpandedDrops(isExpanded?null:c.id)}>{custDrops.length} drop{custDrops.length!==1?"s":""} {isExpanded?"▴":"▾"}</button>{isExpanded&&<div className="drops-expand">{custDrops.map(d=><div key={d.id} className="drops-expand-item">{d.title} · {fmtDate(d.pickup_date)}</div>)}</div>}</>}</td>}{cols.activeDrop&&latestActiveDrop&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{dropStatus===null?"":<span className={`badge ${dropStatus?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{dropStatus?"Ordered":"Not yet"}</span>}</td>}{cols.orders&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{cO.length}</td>}{cols.spent&&<td style={{cursor:"pointer",fontWeight:500}} onClick={()=>onSelectCustomer(c)}>{fmt(cO.reduce((s,o)=>s+Number(o.total),0))}</td>}{cols.since&&<td style={{cursor:"pointer",fontSize:12}} onClick={()=>onSelectCustomer(c)}>{c.created_at?fmtDate(c.created_at.slice(0,10)):"—"}</td>}{cols.optedIn&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.opted_in!==false?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{c.opted_in!==false?"Yes":"No"}</span></td>}</tr>)})}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th style={{width:40}}><input type="checkbox" checked={selected.length===filtered.length&&filtered.length>0} onChange={toggleAll} style={{accentColor:"var(--accent)",width:16,height:16}}/></th><th>Name</th>{cols.email&&<th>Email</th>}{cols.phone&&<th>Phone</th>}{cols.pref&&<th>Pref</th>}{cols.drops&&<th>Drops</th>}{cols.activeDrop&&latestActiveDrop&&<th style={{maxWidth:100}}>{latestActiveDrop.title.length > 12 ? latestActiveDrop.title.slice(0,12)+"…" : latestActiveDrop.title}</th>}{cols.orders&&<th>Orders</th>}{cols.spent&&<th>Spent</th>}{cols.since&&<th>Since</th>}{cols.optedIn&&<th>Opted In</th>}</tr></thead><tbody>{filtered.map(c=>{const cO=orders.filter(o=>o.customer_id===c.id&&o.status!=="cancelled");const dropStatus=getDropOrderStatus(c.id);const custDrops=getCustomerDrops(c.id);const isSelected=selected.includes(c.id);const isExpanded=expandedDrops===c.id;return(<tr key={c.id} style={{background:isSelected?"var(--accent-light)":"transparent"}}><td onClick={e=>e.stopPropagation()}><input type="checkbox" checked={isSelected} onChange={()=>toggleSelect(c.id)} style={{accentColor:"var(--accent)",width:16,height:16}}/></td><td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><div style={{fontWeight:600}}>{c.name}</div>{cols.notes&&c.notes&&<div style={{fontSize:11,color:"var(--text-tertiary)",marginTop:2,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={c.notes}>📝 {c.notes}</div>}</td>{cols.email&&<td style={{cursor:"pointer",fontSize:13}} onClick={()=>onSelectCustomer(c)}>{c.email}</td>}{cols.phone&&<td style={{cursor:"pointer",fontSize:13,color:c.phone?"var(--text)":"var(--text-tertiary)"}} onClick={()=>onSelectCustomer(c)}>{c.phone||"—"}</td>}{cols.pref&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`} style={{fontSize:11}}>{c.prefer_contact==="sms"?"SMS":"Email"}</span></td>}{cols.drops&&<td className="drops-cell" onClick={e=>e.stopPropagation()}>{custDrops.length===0?<span style={{fontSize:12,color:"var(--text-tertiary)"}}>—</span>:<><button className="drops-toggle" onClick={()=>setExpandedDrops(isExpanded?null:c.id)}>{custDrops.length} drop{custDrops.length!==1?"s":""} {isExpanded?"▴":"▾"}</button>{isExpanded&&<div className="drops-expand">{custDrops.map(d=><div key={d.id} className="drops-expand-item">{d.title} · {fmtDate(d.pickup_date)}</div>)}</div>}</>}</td>}{cols.activeDrop&&latestActiveDrop&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{dropStatus===null?"":<span className={`badge ${dropStatus?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{dropStatus?"Ordered":"Not yet"}</span>}</td>}{cols.orders&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}>{cO.length}</td>}{cols.spent&&<td style={{cursor:"pointer",fontWeight:500}} onClick={()=>onSelectCustomer(c)}>{fmt(cO.reduce((s,o)=>s+Number(o.total),0))}</td>}{cols.since&&<td style={{cursor:"pointer",fontSize:12}} onClick={()=>onSelectCustomer(c)}>{c.created_at?fmtDate(c.created_at.slice(0,10)):"—"}</td>}{cols.optedIn&&<td style={{cursor:"pointer"}} onClick={()=>onSelectCustomer(c)}><span className={`badge ${c.opted_in!==false?"badge-active":"badge-cancelled"}`} style={{fontSize:11}}>{c.opted_in!==false?"Yes":"No"}</span></td>}</tr>)})}</tbody></table></div>
     )}
 
     {latestActiveDrop && customers.length > 0 && (() => {
@@ -764,18 +855,20 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
 // SETTINGS TAB
 // ============================================================
 function SettingsTab({ creator, onEditProfile }) {
+  const customerUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}`;
   return (<>
     <div style={{marginBottom:28}}><h1>Settings</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>Manage your storefront profile</p></div>
     <div className="card" style={{maxWidth:600}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}><h2>Storefront Profile</h2><button className="btn btn-secondary btn-sm" onClick={onEditProfile}>{I.edit} Edit</button></div>
       <div className="form-group"><label className="form-label">Business Name</label><div style={{fontSize:16,fontWeight:600}}>{creator?.name||"Not set"}</div></div>
       <div className="form-group"><label className="form-label">Tagline</label><div style={{fontSize:14,color:"var(--text-secondary)"}}>{creator?.tagline||"Not set"}</div></div>
+      <div className="form-group"><label className="form-label">Your Page URL</label><div style={{fontSize:14,fontWeight:500,color:"var(--accent)",wordBreak:"break-all"}}>{customerUrl}</div><div className="form-hint">Share this link with your customers</div></div>
+      <div className="form-group"><label className="form-label">URL Slug</label><div style={{fontSize:14,fontWeight:500}}>{creator?.slug||"Not set"}</div><div className="form-hint">This is the unique part of your URL. Change it in Edit Profile.</div></div>
       <div style={{padding:16,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",marginTop:8}}>
-        <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Preview</div>
+        <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Customer Page Preview</div>
         <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:700}}>{creator?.name||"Your Business"}</div>
         <div style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{creator?.tagline||"Your tagline here"}</div>
       </div>
-      <p style={{fontSize:12,color:"var(--text-tertiary)",marginTop:16}}>This is what customers see at the top of your page.</p>
     </div>
   </>);
 }
@@ -927,19 +1020,23 @@ function CustomerFormModal({ mode, customer, onSave, onClose }) {
 
 // --- Profile Form ---
 function ProfileFormModal({ creator, onSave, onClose }) {
-  const [name, setName] = useState(creator?.name||""); const [tagline, setTagline] = useState(creator?.tagline||""); const [saving, setSaving] = useState(false);
-  const handleSave = async () => { setSaving(true); await onSave({ name, tagline }); setSaving(false); };
+  const [name, setName] = useState(creator?.name||""); const [tagline, setTagline] = useState(creator?.tagline||""); const [slug, setSlug] = useState(creator?.slug||""); const [saving, setSaving] = useState(false);
+  const cleanSlug = (s) => s.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  const handleSave = async () => { setSaving(true); await onSave({ name, tagline, slug: cleanSlug(slug) }); setSaving(false); };
+  const previewUrl = `${window.location.origin}${window.location.pathname}#/${cleanSlug(slug)||"your-business"}`;
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="modal-header"><h2>Edit Profile</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Business Name</label><input className="form-input" placeholder="Your business name" value={name} onChange={e=>setName(e.target.value)}/><div className="form-hint">Appears at the top of your customer page</div></div>
       <div className="form-group"><label className="form-label">Tagline</label><input className="form-input" placeholder="Fresh food, made with love" value={tagline} onChange={e=>setTagline(e.target.value)}/></div>
+      <div className="form-group"><label className="form-label">Page URL Slug</label><input className="form-input" placeholder="my-kitchen" value={slug} onChange={e=>setSlug(e.target.value)}/><div className="form-hint">Letters, numbers, and dashes only. This becomes your page URL.</div></div>
       <div style={{padding:16,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",marginBottom:20}}>
         <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Preview</div>
         <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:700}}>{name||"Your Business"}</div>
         <div style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{tagline||"Your tagline here"}</div>
+        <div style={{fontSize:12,color:"var(--accent)",marginTop:8,wordBreak:"break-all"}}>{previewUrl}</div>
       </div>
-      <button className="btn btn-primary btn-full" disabled={!name||saving} onClick={handleSave}>{saving?"Saving...":"Save Profile"}</button>
+      <button className="btn btn-primary btn-full" disabled={!name||!slug||saving} onClick={handleSave}>{saving?"Saving...":"Save Profile"}</button>
     </div></div>
   );
 }
