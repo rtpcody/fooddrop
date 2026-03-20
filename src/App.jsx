@@ -1077,14 +1077,49 @@ function SettingsTab({ creator, onEditProfile, session, showToast }) {
 // --- Image Upload Component ---
 function ImageUpload({ value, onChange, label }) {
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const compressImage = (file, maxWidth = 1200) => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let w = img.width, h = img.height;
+        if (w > maxWidth) { h = (h * maxWidth) / w; w = maxWidth; }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
+      };
+      img.onerror = () => resolve(null);
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setError(null);
+
+    // Check file type
+    if (!file.type.startsWith("image/")) { setError("Please select an image file."); return; }
+
     setUploading(true);
-    const { url, error } = await supabase.uploadImage(file);
+
+    // Compress if larger than 1MB
+    let uploadFile = file;
+    if (file.size > 1024 * 1024) {
+      const compressed = await compressImage(file);
+      if (compressed) {
+        uploadFile = new File([compressed], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
+      }
+    }
+
+    const { url, error: uploadErr } = await supabase.uploadImage(uploadFile);
     setUploading(false);
-    if (url) onChange(url);
+    if (url) { onChange(url); setError(null); }
+    else { setError("Upload failed. Try a smaller image or different format."); console.error("Upload error:", uploadErr); }
   };
+
   return (
     <div className="form-group">
       <label className="form-label">{label || "Image"}</label>
@@ -1096,9 +1131,10 @@ function ImageUpload({ value, onChange, label }) {
       ) : (
         <div className="img-upload">
           <input type="file" accept="image/*" onChange={handleFile}/>
-          <div>{uploading ? <><div className="spin" style={{width:20,height:20,margin:"0 auto 8px"}}/> Uploading...</> : <><span style={{color:"var(--accent)"}}>{I.image}</span><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>Click or drag to upload</div></>}</div>
+          <div>{uploading ? <><div className="spin" style={{width:20,height:20,margin:"0 auto 8px"}}/> Compressing & uploading...</> : <><span style={{color:"var(--accent)"}}>{I.image}</span><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>Click or drag to upload</div></>}</div>
         </div>
       )}
+      {error && <div style={{fontSize:12,color:"var(--red)",marginTop:6}}>{error}</div>}
     </div>
   );
 }
@@ -1458,14 +1494,17 @@ function CustomerSignupForm({ creator, customers, showToast, loadData, onDone })
   const handleSubmit = async () => {
     if (!name || !email || !optedIn) return;
     setSaving(true);
-    // Check if already exists
-    const existing = customers.find(c => c.email.toLowerCase() === email.toLowerCase());
-    if (existing) {
-      await supabase.from("customers").update({ name, phone, prefer_contact: preferContact, opted_in: true }).eq("id", existing.id).execute();
-    } else if (creator) {
-      await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone, prefer_contact: preferContact, opted_in: true }).execute();
-    }
-    setSaving(false); setDone(true); loadData();
+    try {
+      const existing = customers.find(c => c.email.toLowerCase() === email.toLowerCase());
+      if (existing) {
+        const { error } = await supabase.from("customers").update({ name, phone, prefer_contact: preferContact, opted_in: true }).eq("id", existing.id).execute();
+        if (error) { console.error("Signup update error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
+      } else if (creator) {
+        const { error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "" }).execute();
+        if (error) { console.error("Signup insert error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
+      }
+      setSaving(false); setDone(true); loadData();
+    } catch (e) { console.error("Signup exception:", e); showToast("Something went wrong.", "error"); setSaving(false); }
   };
 
   if (done) return (
