@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v10 — Creator slugs, multi-creator routing, split contact columns
+// FOODDROP MVP v11 — Authentication, protected admin, account settings
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -45,6 +45,50 @@ const supabase = {
     if (!res.ok) return { url: null, error: "Upload failed" };
     const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/images/${fileName}`;
     return { url: publicUrl, error: null };
+  },
+  auth: {
+    signIn: async (email, password) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) return { session: null, error: { message: data.error_description || data.msg || "Login failed" } };
+        return { session: data, error: null };
+      } catch (e) { return { session: null, error: { message: e.message } }; }
+    },
+    signOut: async (accessToken) => {
+      try {
+        await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        });
+      } catch {}
+    },
+    getUser: async (accessToken) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return { user: null };
+        const data = await res.json();
+        return { user: data };
+      } catch { return { user: null }; }
+    },
+    updateUser: async (accessToken, updates) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+          method: "PUT",
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+        const data = await res.json();
+        if (!res.ok) return { error: { message: data.error_description || data.msg || "Update failed" } };
+        return { error: null };
+      } catch (e) { return { error: { message: e.message } }; }
+    },
   },
 };
 
@@ -151,6 +195,8 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 .view-tabs{display:flex;gap:4px;margin-bottom:20px;background:var(--surface-alt);border-radius:var(--radius-sm);padding:4px}.view-tab{flex:1;text-align:center;padding:10px 16px;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;border:none;background:transparent;font-family:var(--font-body);color:var(--text-secondary);transition:all .15s}.view-tab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm)}
 @media print{.creator-topbar,.creator-nav,.btn,.view-tabs,.section-header .btn{display:none!important}.main-content{padding:0!important;max-width:100%!important}}
 
+.login-page{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg)}.login-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px 32px;box-shadow:var(--shadow)}.login-brand{text-align:center;margin-bottom:28px}.login-brand-icon{font-size:40px;margin-bottom:8px}.login-brand h2{font-family:var(--font-display);font-size:24px}.login-brand p{color:var(--text-secondary);font-size:14px;margin-top:4px}.login-error{padding:10px 14px;background:var(--red-light);color:var(--red);border-radius:var(--radius-sm);font-size:13px;margin-bottom:16px}
+
 `;
 
 // ============================================================
@@ -174,7 +220,7 @@ function parseRoute(hash) {
 }
 
 // ============================================================
-// MAIN APP
+// MAIN APP — with auth
 // ============================================================
 export default function FoodDropApp() {
   const route = useRoute();
@@ -190,8 +236,43 @@ export default function FoodDropApp() {
   const [dbOk, setDbOk] = useState(null);
   const [toast, setToast] = useState(null);
   const [toastType, setToastType] = useState("ok");
+  // Auth state
+  const [session, setSession] = useState(() => {
+    try { const s = localStorage.getItem("fd_session"); return s ? JSON.parse(s) : null; } catch { return null; }
+  });
+  const [authChecked, setAuthChecked] = useState(false);
 
   const showToast = useCallback((msg, type = "ok") => { setToast(msg); setToastType(type); setTimeout(() => setToast(null), 3500); }, []);
+
+  // Persist session
+  useEffect(() => {
+    if (session) localStorage.setItem("fd_session", JSON.stringify(session));
+    else localStorage.removeItem("fd_session");
+  }, [session]);
+
+  // Validate session on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      if (session?.access_token) {
+        const { user } = await supabase.auth.getUser(session.access_token);
+        if (!user) setSession(null);
+      }
+      setAuthChecked(true);
+    };
+    checkSession();
+  }, []);
+
+  const handleLogin = async (email, password) => {
+    const { session: s, error } = await supabase.auth.signIn(email, password);
+    if (error) return { error };
+    setSession(s);
+    return { error: null };
+  };
+
+  const handleLogout = async () => {
+    if (session?.access_token) await supabase.auth.signOut(session.access_token);
+    setSession(null);
+  };
 
   const loadData = useCallback(async () => {
     try {
@@ -200,15 +281,9 @@ export default function FoodDropApp() {
       const creators = cRes.data || [];
       setAllCreators(creators);
 
-      // Find creator by slug
       let activeCreator = null;
-      if (slug) {
-        activeCreator = creators.find(c => c.slug === slug);
-      }
-      // Fallback: if no slug or slug not found, use first creator (backward compat)
-      if (!activeCreator && creators.length === 1 && !slug) {
-        activeCreator = creators[0];
-      }
+      if (slug) activeCreator = creators.find(c => c.slug === slug);
+      if (!activeCreator && creators.length === 1 && !slug) activeCreator = creators[0];
       setCreator(activeCreator);
 
       if (activeCreator) {
@@ -241,9 +316,9 @@ export default function FoodDropApp() {
   const getDropOrders = useCallback((id) => orders.filter((o) => o.drop_id === id), [orders]);
   const getOrderItems = useCallback((id) => orderItems.filter((oi) => oi.order_id === id), [orderItems]);
 
-  if (loading) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
+  if (loading || !authChecked) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
 
-  // Landing page — no slug provided
+  // Landing page
   if (!slug && !creator) {
     return (
       <><style>{CSS}</style><div className="app">
@@ -267,12 +342,87 @@ export default function FoodDropApp() {
     );
   }
 
+  // Admin route — check auth
+  if (isAdmin) {
+    const isLoggedIn = session?.access_token && session?.user;
+    const isAuthorized = isLoggedIn && creator?.auth_user_id === session.user.id;
+
+    if (!isLoggedIn) {
+      return (
+        <><style>{CSS}</style><div className="app">
+          <LoginPage creator={creator} onLogin={handleLogin} showToast={showToast}/>
+          {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+        </div></>
+      );
+    }
+
+    if (!isAuthorized) {
+      return (
+        <><style>{CSS}</style><div className="app">
+          <div className="loading-screen" style={{color:"var(--text)"}}>
+            <h2>Access Denied</h2>
+            <p style={{color:"var(--text-secondary)"}}>Your account doesn't have access to this dashboard.</p>
+            <div style={{display:"flex",gap:12,marginTop:16}}>
+              <button className="btn btn-secondary" onClick={handleLogout}>Log Out</button>
+              <a href="#/" className="btn btn-primary" style={{textDecoration:"none"}}>Go Home</a>
+            </div>
+          </div>
+        </div></>
+      );
+    }
+
+    return (
+      <><style>{CSS}</style><div className="app">
+        {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
+        <CreatorDashboard creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} showToast={showToast} loadData={loadData} session={session} onLogout={handleLogout}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  // Customer storefront — no auth needed
   return (
     <><style>{CSS}</style><div className="app">
       {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
-      {isAdmin ? <CreatorDashboard creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} showToast={showToast} loadData={loadData}/> : <CustomerStorefront creator={creator} drops={drops} getDropItems={getDropItems} showToast={showToast} loadData={loadData} customers={customers}/>}
+      <CustomerStorefront creator={creator} drops={drops} getDropItems={getDropItems} showToast={showToast} loadData={loadData} customers={customers}/>
       {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
     </div></>
+  );
+}
+
+// ============================================================
+// LOGIN PAGE
+// ============================================================
+function LoginPage({ creator, onLogin, showToast }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!email || !password) return;
+    setLoading(true); setError(null);
+    const { error: err } = await onLogin(email, password);
+    setLoading(false);
+    if (err) setError(err.message);
+  };
+
+  const handleKeyDown = (e) => { if (e.key === "Enter") handleSubmit(); };
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-icon">🍽️</div>
+          <h2>{creator?.name || "FoodDrop"}</h2>
+          <p>Creator Dashboard</p>
+        </div>
+        {error && <div className="login-error">{error}</div>}
+        <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown}/></div>
+        <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/></div>
+        <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={handleSubmit}>{loading?"Signing in...":"Sign In"}</button>
+      </div>
+    </div>
   );
 }
 
@@ -306,7 +456,7 @@ function LandingPage({ creators }) {
 // ============================================================
 // CREATOR DASHBOARD
 // ============================================================
-function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropItems, getDropItems, getDropOrders, getOrderItems, showToast, loadData }) {
+function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropItems, getDropItems, getDropOrders, getOrderItems, showToast, loadData, session, onLogout }) {
   const [tab, setTab] = useState("dashboard");
   const [selectedDrop, setSelectedDrop] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -397,7 +547,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
 
   return (
     <>
-      <div className="creator-topbar"><span className="creator-topbar-brand">🍽️ FoodDrop</span><div className="creator-topbar-actions"><button className="creator-topbar-link" onClick={copyUrl}>{I.share} Copy Customer Link</button><a className="creator-topbar-link" href={customerUrl} target="_blank" rel="noopener noreferrer">{I.eye} View Customer Page</a></div></div>
+      <div className="creator-topbar"><span className="creator-topbar-brand">🍽️ FoodDrop</span><div className="creator-topbar-actions"><button className="creator-topbar-link" onClick={copyUrl}>{I.share} Copy Customer Link</button><a className="creator-topbar-link" href={customerUrl} target="_blank" rel="noopener noreferrer">{I.eye} View Page</a><button className="creator-topbar-link" onClick={onLogout}>Log Out</button></div></div>
       <nav className="creator-nav">
         {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"customers",label:"Customers",icon:I.users},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
           <button key={t.key} className={tab===t.key?"active":""} onClick={()=>{setTab(t.key);setSelectedDrop(null);setSelectedCustomer(null)}}>{t.icon} {t.label}</button>
@@ -409,7 +559,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}/>}
-        {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)}/>}
+        {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} session={session} showToast={showToast}/>}
       </div>
       {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null)}}/>}
       {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
@@ -854,20 +1004,67 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
 // ============================================================
 // SETTINGS TAB
 // ============================================================
-function SettingsTab({ creator, onEditProfile }) {
+function SettingsTab({ creator, onEditProfile, session, showToast }) {
   const customerUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}`;
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleChangeEmail = async () => {
+    if (!newEmail) return;
+    setSaving(true);
+    const { error } = await supabase.auth.updateUser(session.access_token, { email: newEmail });
+    setSaving(false);
+    if (error) { showToast(error.message, "error"); return; }
+    showToast("Email update requested. Check your new email for confirmation.");
+    setNewEmail("");
+  };
+
+  const handleChangePassword = async () => {
+    if (!newPassword || newPassword !== confirmPassword) { showToast("Passwords don't match", "error"); return; }
+    if (newPassword.length < 6) { showToast("Password must be at least 6 characters", "error"); return; }
+    setSaving(true);
+    const { error } = await supabase.auth.updateUser(session.access_token, { password: newPassword });
+    setSaving(false);
+    if (error) { showToast(error.message, "error"); return; }
+    showToast("Password updated successfully!");
+    setNewPassword(""); setConfirmPassword("");
+  };
+
   return (<>
-    <div style={{marginBottom:28}}><h1>Settings</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>Manage your storefront profile</p></div>
-    <div className="card" style={{maxWidth:600}}>
+    <div style={{marginBottom:28}}><h1>Settings</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>Manage your storefront and account</p></div>
+
+    {/* Storefront Profile */}
+    <div className="card" style={{maxWidth:600,marginBottom:24}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}><h2>Storefront Profile</h2><button className="btn btn-secondary btn-sm" onClick={onEditProfile}>{I.edit} Edit</button></div>
       <div className="form-group"><label className="form-label">Business Name</label><div style={{fontSize:16,fontWeight:600}}>{creator?.name||"Not set"}</div></div>
       <div className="form-group"><label className="form-label">Tagline</label><div style={{fontSize:14,color:"var(--text-secondary)"}}>{creator?.tagline||"Not set"}</div></div>
       <div className="form-group"><label className="form-label">Your Page URL</label><div style={{fontSize:14,fontWeight:500,color:"var(--accent)",wordBreak:"break-all"}}>{customerUrl}</div><div className="form-hint">Share this link with your customers</div></div>
-      <div className="form-group"><label className="form-label">URL Slug</label><div style={{fontSize:14,fontWeight:500}}>{creator?.slug||"Not set"}</div><div className="form-hint">This is the unique part of your URL. Change it in Edit Profile.</div></div>
+      <div className="form-group"><label className="form-label">URL Slug</label><div style={{fontSize:14,fontWeight:500}}>{creator?.slug||"Not set"}</div></div>
       <div style={{padding:16,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",marginTop:8}}>
         <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Customer Page Preview</div>
         <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:700}}>{creator?.name||"Your Business"}</div>
         <div style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{creator?.tagline||"Your tagline here"}</div>
+      </div>
+    </div>
+
+    {/* Account Settings */}
+    <div className="card" style={{maxWidth:600,marginBottom:24}}>
+      <h2 style={{marginBottom:20}}>Account</h2>
+      <div className="form-group"><label className="form-label">Current Email</label><div style={{fontSize:14,fontWeight:500}}>{session?.user?.email||"Unknown"}</div></div>
+
+      <div style={{borderTop:"1px solid var(--border)",paddingTop:20,marginTop:8}}>
+        <h3 style={{marginBottom:12}}>Change Email</h3>
+        <div className="form-group"><label className="form-label">New Email</label><input className="form-input" type="email" placeholder="newemail@example.com" value={newEmail} onChange={e=>setNewEmail(e.target.value)}/></div>
+        <button className="btn btn-secondary btn-sm" disabled={!newEmail||saving} onClick={handleChangeEmail}>{saving?"Updating...":"Update Email"}</button>
+      </div>
+
+      <div style={{borderTop:"1px solid var(--border)",paddingTop:20,marginTop:20}}>
+        <h3 style={{marginBottom:12}}>Change Password</h3>
+        <div className="form-group"><label className="form-label">New Password</label><input className="form-input" type="password" placeholder="At least 6 characters" value={newPassword} onChange={e=>setNewPassword(e.target.value)}/></div>
+        <div className="form-group"><label className="form-label">Confirm Password</label><input className="form-input" type="password" placeholder="Type it again" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)}/></div>
+        <button className="btn btn-secondary btn-sm" disabled={!newPassword||!confirmPassword||saving} onClick={handleChangePassword}>{saving?"Updating...":"Update Password"}</button>
       </div>
     </div>
   </>);
