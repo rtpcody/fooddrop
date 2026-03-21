@@ -85,7 +85,7 @@ export default async function handler(req, res) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: `${creatorName || "FoodDrop"} <onboarding@resend.dev>`,
+        from: `${creatorName || "FoodDrop"} <orders@getfooddrop.com>`,
         to: [to],
         subject: `Order Confirmed — ${dropTitle}`,
         html: htmlEmail,
