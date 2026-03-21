@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v11 — Authentication, protected admin, account settings
+// FOODDROP MVP v12 — Automated order confirmation emails via Resend
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -1424,6 +1424,26 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
     await supabase.from("order_items").insert(cartItems.map(ci=>{const di=items.find(d=>d.id===ci.dropItemId);return{order_id:no.id,drop_item_id:ci.dropItemId,item_name:di?.name||"Unknown",item_price:di?.price||0,quantity:ci.qty}})).execute();
     for(const ci of cartItems){const di=items.find(d=>d.id===ci.dropItemId);if(di)await supabase.from("drop_items").update({claimed:di.claimed+ci.qty}).eq("id",di.id).execute()}
     const orderDetail={...no,items:cartItems.map(ci=>{const di=items.find(d=>d.id===ci.dropItemId);return{name:di?.name,price:di?.price,qty:ci.qty}}),drop,customerName:name,customerEmail:email};
+
+    // Send confirmation email (non-blocking — don't fail the order if email fails)
+    try {
+      await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: email,
+          customerName: name,
+          creatorName: creator?.name || "FoodDrop",
+          dropTitle: drop.title,
+          pickupDate: fmtDateLong(drop.pickup_date),
+          pickupTime: drop.pickup_time,
+          pickupLocation: drop.pickup_location,
+          items: orderDetail.items,
+          total: cartTotal,
+        }),
+      });
+    } catch (emailErr) { console.error("Email send failed:", emailErr); }
+
     setPlacing(false);onOrderPlaced(orderDetail);
   };
 
@@ -1476,7 +1496,7 @@ function OrderConfirmation({ order, creator, onBack }) {
       </div>
     </div>
     <div className="card" style={{textAlign:"left",background:"var(--gold-light)",border:"1px solid #f0dca0"}}><div style={{fontSize:14,fontWeight:600,color:"var(--gold)",marginBottom:4}}>💵 Payment</div><p style={{fontSize:14,color:"var(--text-secondary)"}}>Bring <strong>{fmt(order.total)}</strong> cash to pickup.</p></div>
-    <div className="card" style={{textAlign:"left",marginTop:12}}><div style={{fontSize:14,fontWeight:600,marginBottom:4}}>📋 Your Confirmation</div><p style={{fontSize:14,color:"var(--text-secondary)"}}>Save or screenshot this page as your order confirmation. We sent details to <strong>{order.customerEmail}</strong>.</p></div>
+    <div className="card" style={{textAlign:"left",marginTop:12}}><div style={{fontSize:14,fontWeight:600,marginBottom:4}}>📧 Confirmation Sent</div><p style={{fontSize:14,color:"var(--text-secondary)"}}>We've sent your order details to <strong>{order.customerEmail}</strong>. Check your inbox!</p></div>
     <button className="btn btn-secondary" style={{marginTop:24}} onClick={onBack}>← Browse More Drops</button>
   </div>);
 }
