@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v13 — Phone formatting, bulk delete, item descriptions,
-//                    permanent drop delete, revenue enhancements,
-//                    storefront theming + hero image
+// FOODDROP MVP v14 — Universal creator login at /#/login,
+//                    creator isolation (no public creator listing),
+//                    auto-redirect to correct dashboard on login
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -260,12 +260,13 @@ function useRoute() {
 
 function parseRoute(hash) {
   const path = hash.replace("#/", "").replace(/\/$/, "");
-  if (!path) return { slug: null, isAdmin: false };
+  if (!path) return { slug: null, isAdmin: false, isLogin: false };
+  if (path === "login") return { slug: null, isAdmin: false, isLogin: true };
   const parts = path.split("/");
   if (parts.length >= 2 && parts[parts.length - 1] === "admin") {
-    return { slug: parts.slice(0, -1).join("/"), isAdmin: true };
+    return { slug: parts.slice(0, -1).join("/"), isAdmin: true, isLogin: false };
   }
-  return { slug: parts.join("/"), isAdmin: false };
+  return { slug: parts.join("/"), isAdmin: false, isLogin: false };
 }
 
 // ============================================================
@@ -273,7 +274,7 @@ function parseRoute(hash) {
 // ============================================================
 export default function FoodDropApp() {
   const route = useRoute();
-  const { slug, isAdmin } = parseRoute(route);
+  const { slug, isAdmin, isLogin } = parseRoute(route);
   const [allCreators, setAllCreators] = useState([]);
   const [creator, setCreator] = useState(null);
   const [customers, setCustomers] = useState([]);
@@ -285,7 +286,6 @@ export default function FoodDropApp() {
   const [dbOk, setDbOk] = useState(null);
   const [toast, setToast] = useState(null);
   const [toastType, setToastType] = useState("ok");
-  // Auth state
   const [session, setSession] = useState(() => {
     try { const s = localStorage.getItem("fd_session"); return s ? JSON.parse(s) : null; } catch { return null; }
   });
@@ -293,13 +293,11 @@ export default function FoodDropApp() {
 
   const showToast = useCallback((msg, type = "ok") => { setToast(msg); setToastType(type); setTimeout(() => setToast(null), 3500); }, []);
 
-  // Persist session
   useEffect(() => {
     if (session) localStorage.setItem("fd_session", JSON.stringify(session));
     else localStorage.removeItem("fd_session");
   }, [session]);
 
-  // Validate session on mount
   useEffect(() => {
     const checkSession = async () => {
       if (session?.access_token) {
@@ -311,16 +309,24 @@ export default function FoodDropApp() {
     checkSession();
   }, []);
 
+  // Universal login — signs in, finds creator row by auth_user_id, redirects
   const handleLogin = async (email, password) => {
     const { session: s, error } = await supabase.auth.signIn(email, password);
     if (error) return { error };
     setSession(s);
+    // Find the creator that belongs to this user and redirect to their dashboard
+    const { data: creators } = await supabase.from("creators").select("*").execute();
+    const myCreator = (creators || []).find(c => c.auth_user_id === s.user.id);
+    if (myCreator?.slug) {
+      window.location.hash = `#/${myCreator.slug}/admin`;
+    }
     return { error: null };
   };
 
   const handleLogout = async () => {
     if (session?.access_token) await supabase.auth.signOut(session.access_token);
     setSession(null);
+    window.location.hash = "#/login";
   };
 
   const loadData = useCallback(async () => {
@@ -332,7 +338,7 @@ export default function FoodDropApp() {
 
       let activeCreator = null;
       if (slug) activeCreator = creators.find(c => c.slug === slug);
-      if (!activeCreator && creators.length === 1 && !slug) activeCreator = creators[0];
+      // No longer fall back to first creator when no slug — that was the bug exposing all creators
       setCreator(activeCreator);
 
       if (activeCreator) {
@@ -367,25 +373,43 @@ export default function FoodDropApp() {
 
   if (loading || !authChecked) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
 
-  // Landing page
-  if (!slug && !creator) {
+  // /#/login — universal creator login page
+  if (isLogin) {
+    // Already logged in? Find their creator and redirect
+    if (session?.access_token && session?.user) {
+      const myCreator = allCreators.find(c => c.auth_user_id === session.user.id);
+      if (myCreator?.slug) {
+        window.location.hash = `#/${myCreator.slug}/admin`;
+        return null;
+      }
+    }
     return (
       <><style>{CSS}</style><div className="app">
-        {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
-        <LandingPage creators={allCreators}/>
+        <UniversalLoginPage onLogin={handleLogin} showToast={showToast}/>
         {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
       </div></>
     );
   }
 
-  // Creator not found
+  // /#/ — root with no slug, show neutral landing (no creator listing)
+  if (!slug && !creator) {
+    return (
+      <><style>{CSS}</style><div className="app">
+        {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
+        <LandingPage/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  // Creator slug not found
   if (slug && !creator) {
     return (
       <><style>{CSS}</style><div className="app">
         <div className="loading-screen" style={{color:"var(--text)"}}>
           <h2>Page not found</h2>
           <p style={{color:"var(--text-secondary)"}}>No creator found at this URL.</p>
-          <a href="#/" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>← Go Home</a>
+          <a href="#/login" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>Creator Login</a>
         </div>
       </div></>
     );
@@ -399,7 +423,7 @@ export default function FoodDropApp() {
     if (!isLoggedIn) {
       return (
         <><style>{CSS}</style><div className="app">
-          <LoginPage creator={creator} onLogin={handleLogin} showToast={showToast}/>
+          <UniversalLoginPage onLogin={handleLogin} showToast={showToast}/>
           {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
         </div></>
       );
@@ -413,7 +437,7 @@ export default function FoodDropApp() {
             <p style={{color:"var(--text-secondary)"}}>Your account doesn't have access to this dashboard.</p>
             <div style={{display:"flex",gap:12,marginTop:16}}>
               <button className="btn btn-secondary" onClick={handleLogout}>Log Out</button>
-              <a href="#/" className="btn btn-primary" style={{textDecoration:"none"}}>Go Home</a>
+              <a href="#/login" className="btn btn-primary" style={{textDecoration:"none"}}>Back to Login</a>
             </div>
           </div>
         </div></>
@@ -440,9 +464,9 @@ export default function FoodDropApp() {
 }
 
 // ============================================================
-// LOGIN PAGE
+// UNIVERSAL LOGIN PAGE — works for any creator via /#/login
 // ============================================================
-function LoginPage({ creator, onLogin, showToast }) {
+function UniversalLoginPage({ onLogin, showToast }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -453,7 +477,7 @@ function LoginPage({ creator, onLogin, showToast }) {
     setLoading(true); setError(null);
     const { error: err } = await onLogin(email, password);
     setLoading(false);
-    if (err) setError(err.message);
+    if (err) setError("Incorrect email or password. Please try again.");
   };
 
   const handleKeyDown = (e) => { if (e.key === "Enter") handleSubmit(); };
@@ -463,40 +487,41 @@ function LoginPage({ creator, onLogin, showToast }) {
       <div className="login-card">
         <div className="login-brand">
           <div className="login-brand-icon">🍽️</div>
-          <h2>{creator?.name || "FoodDrop"}</h2>
+          <h2>FoodDrop</h2>
           <p>Creator Dashboard</p>
         </div>
         {error && <div className="login-error">{error}</div>}
-        <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown}/></div>
-        <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/></div>
+        <div className="form-group">
+          <label className="form-label">Email</label>
+          <input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown} autoFocus/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Password</label>
+          <input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/>
+        </div>
         <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={handleSubmit}>{loading?"Signing in...":"Sign In"}</button>
+        <div style={{marginTop:20,textAlign:"center"}}>
+          <a href="https://getfooddrop.com" style={{fontSize:13,color:"var(--text-tertiary)",textDecoration:"none"}}>← Back to FoodDrop.com</a>
+        </div>
       </div>
     </div>
   );
 }
 
 // ============================================================
-// LANDING PAGE
+// LANDING PAGE — neutral, no creator listing
 // ============================================================
-function LandingPage({ creators }) {
+function LandingPage() {
   return (
     <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
-      <div style={{textAlign:"center",maxWidth:480}}>
+      <div style={{textAlign:"center",maxWidth:400}}>
         <div style={{fontSize:48,marginBottom:16}}>🍽️</div>
         <h1 style={{marginBottom:8}}>FoodDrop</h1>
-        <p style={{color:"var(--text-secondary)",fontSize:16,marginBottom:32}}>The platform for food creators to manage drops, customers, and orders.</p>
-        {creators.length > 0 && (<>
-          <h3 style={{marginBottom:12,color:"var(--text-secondary)"}}>Active Creators</h3>
-          <div style={{display:"grid",gap:12}}>
-            {creators.filter(c=>c.slug).map(c => (
-              <a key={c.id} href={`#/${c.slug}`} className="card card-hover" style={{textDecoration:"none",color:"var(--text)",textAlign:"left"}}>
-                <h3>{c.name || "Unnamed Creator"}</h3>
-                {c.tagline && <p style={{fontSize:14,color:"var(--text-secondary)",marginTop:4}}>{c.tagline}</p>}
-                <div style={{fontSize:12,color:"var(--accent)",marginTop:8}}>Visit page →</div>
-              </a>
-            ))}
-          </div>
-        </>)}
+        <p style={{color:"var(--text-secondary)",fontSize:16,marginBottom:32}}>The platform for independent food creators.</p>
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          <a href="#/login" className="btn btn-primary" style={{textDecoration:"none"}}>Creator Login</a>
+          <a href="https://getfooddrop.com" className="btn btn-secondary" style={{textDecoration:"none"}}>Learn More</a>
+        </div>
       </div>
     </div>
   );
