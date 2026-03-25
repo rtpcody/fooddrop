@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v15 — Reports tab with Sales Summary + Item Summary,
-//                    date range presets + custom picker, drop-by-drop
-//                    and item-by-item breakdowns, absorbed revenue modal
+// FOODDROP MVP v16 — Customer Summary added to Reports tab
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -820,9 +818,10 @@ function ReportsTab({ drops, orders, orderItems, customers, getDropOrders, getDr
       </div>
 
       {/* Report type selector */}
-      <div className="view-tabs" style={{maxWidth:360,marginBottom:28}}>
+      <div className="view-tabs" style={{maxWidth:520,marginBottom:28}}>
         <button className={`view-tab ${report==="sales"?"active":""}`} onClick={()=>setReport("sales")}>Sales Summary</button>
         <button className={`view-tab ${report==="items"?"active":""}`} onClick={()=>setReport("items")}>Item Summary</button>
+        <button className={`view-tab ${report==="customers"?"active":""}`} onClick={()=>setReport("customers")}>Customer Summary</button>
       </div>
 
       {report === "sales" && (
@@ -840,6 +839,15 @@ function ReportsTab({ drops, orders, orderItems, customers, getDropOrders, getDr
           drops={nonArchived} orders={rangeOrders} getDropItems={getDropItems}
           getOrderItems={getOrderItems} onViewDrop={onViewDrop}
           subview={itemSubview} setSubview={setItemSubview}
+          preset={preset} setPreset={setPreset}
+          customStart={customStart} setCustomStart={setCustomStart}
+          customEnd={customEnd} setCustomEnd={setCustomEnd}
+        />
+      )}
+      {report === "customers" && (
+        <CustomerSummary
+          drops={nonArchived} orders={rangeOrders} customers={customers}
+          getOrderItems={getOrderItems}
           preset={preset} setPreset={setPreset}
           customStart={customStart} setCustomStart={setCustomStart}
           customEnd={customEnd} setCustomEnd={setCustomEnd}
@@ -1129,6 +1137,165 @@ function ItemSummary({ drops, orders, getDropItems, getOrderItems, onViewDrop, s
 // Helper used inside ItemSummary to get orders for a drop without prop drilling getDropOrders
 function getDropOrders_local(dropId, orders) {
   return orders.filter(o => o.drop_id === dropId);
+}
+
+// ── Customer Summary ───────────────────────────────────────────
+function CustomerSummary({ drops, orders, customers, getOrderItems, preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd }) {
+  const [sortKey, setSortKey] = useState("spent");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const handleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === "desc" ? "asc" : "desc");
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+
+  const SortIcon = ({ col }) => {
+    if (sortKey !== col) return <span style={{color:"var(--text-tertiary)",fontSize:10,marginLeft:4}}>↕</span>;
+    return <span style={{color:"var(--accent)",fontSize:10,marginLeft:4}}>{sortDir==="desc"?"↓":"↑"}</span>;
+  };
+
+  // Build per-customer stats from range orders
+  const custMap = {};
+  orders.forEach(o => {
+    const key = o.customer_id || ("guest_" + (o.customer_email || o.customer_name || o.id));
+    if (!custMap[key]) {
+      const cust = customers.find(c => c.id === o.customer_id);
+      custMap[key] = {
+        id: o.customer_id,
+        name: cust?.name || o.customer_name || "Guest",
+        email: cust?.email || o.customer_email || "",
+        totalSpent: 0,
+        orderCount: 0,
+        firstOrder: null,
+        lastOrder: null,
+        dropIds: new Set(),
+      };
+    }
+    custMap[key].totalSpent += Number(o.total);
+    custMap[key].orderCount += 1;
+    const d = new Date(o.created_at);
+    if (!custMap[key].firstOrder || d < custMap[key].firstOrder) custMap[key].firstOrder = d;
+    if (!custMap[key].lastOrder || d > custMap[key].lastOrder) custMap[key].lastOrder = d;
+    if (o.drop_id) custMap[key].dropIds.add(o.drop_id);
+  });
+
+  let rows = Object.values(custMap).map(c => ({
+    ...c,
+    dropIds: Array.from(c.dropIds),
+    isRepeat: c.orderCount > 1,
+  }));
+
+  // Sort
+  rows.sort((a, b) => {
+    let av, bv;
+    switch (sortKey) {
+      case "spent":    av = a.totalSpent;   bv = b.totalSpent;   break;
+      case "orders":   av = a.orderCount;   bv = b.orderCount;   break;
+      case "last":     av = a.lastOrder;    bv = b.lastOrder;    break;
+      case "first":    av = a.firstOrder;   bv = b.firstOrder;   break;
+      case "name":     av = a.name.toLowerCase(); bv = b.name.toLowerCase(); break;
+      default:         av = a.totalSpent;   bv = b.totalSpent;
+    }
+    if (av < bv) return sortDir === "desc" ? 1 : -1;
+    if (av > bv) return sortDir === "desc" ? -1 : 1;
+    return 0;
+  });
+
+  const totalRevenue = rows.reduce((s, c) => s + c.totalSpent, 0);
+  const repeatCount = rows.filter(c => c.isRepeat).length;
+  const topSpender = rows[0] || null;
+
+  // Map drop ids to titles for the drops column
+  const dropTitle = (id) => drops.find(d => d.id === id)?.title || "Unknown Drop";
+
+  return (
+    <>
+      <DateRangeSelector preset={preset} setPreset={setPreset} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
+
+      {/* Summary stats */}
+      <div className="stats-row" style={{marginBottom:24}}>
+        <div className="stat-card">
+          <div className="stat-label">Customers Who Ordered</div>
+          <div className="stat-value">{rows.length}</div>
+          <div className="stat-sub">in this date range</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Repeat Buyers</div>
+          <div className="stat-value" style={{color:"var(--green)"}}>{repeatCount}</div>
+          <div className="stat-sub">{rows.length > 0 ? Math.round((repeatCount/rows.length)*100) : 0}% of customers</div>
+        </div>
+        {topSpender && (
+          <div className="stat-card">
+            <div className="stat-label">Top Customer</div>
+            <div className="stat-value" style={{fontSize:20}}>{topSpender.name}</div>
+            <div className="stat-sub">{fmt(topSpender.totalSpent)} across {topSpender.orderCount} order{topSpender.orderCount!==1?"s":""}</div>
+          </div>
+        )}
+      </div>
+
+      {rows.length > 0 ? (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <h3>Customer Breakdown</h3>
+            <div style={{fontSize:12,color:"var(--text-tertiary)"}}>Click column headers to sort</div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("name")}>Customer <SortIcon col="name"/></th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("spent")}>Total Spent <SortIcon col="spent"/></th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("orders")}>Orders <SortIcon col="orders"/></th>
+                  <th>Status</th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("first")}>First Order <SortIcon col="first"/></th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("last")}>Last Order <SortIcon col="last"/></th>
+                  <th>Drops</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((cust, i) => (
+                  <tr key={cust.id || i}>
+                    <td>
+                      <div style={{fontWeight:600}}>{cust.name}</div>
+                      {cust.email && <div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:2}}>{cust.email}</div>}
+                    </td>
+                    <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(cust.totalSpent)}</td>
+                    <td>{cust.orderCount}</td>
+                    <td>
+                      <span className={`badge ${cust.isRepeat ? "badge-active" : "badge-preorder"}`} style={{fontSize:11}}>
+                        {cust.isRepeat ? "Repeat" : "First-time"}
+                      </span>
+                    </td>
+                    <td style={{fontSize:13,color:"var(--text-secondary)"}}>{cust.firstOrder ? fmtDate(cust.firstOrder.toISOString().slice(0,10)) : "—"}</td>
+                    <td style={{fontSize:13,color:"var(--text-secondary)"}}>{cust.lastOrder ? fmtDate(cust.lastOrder.toISOString().slice(0,10)) : "—"}</td>
+                    <td>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {cust.dropIds.map(id => (
+                          <span key={id} style={{fontSize:11,background:"var(--surface-alt)",border:"1px solid var(--border)",borderRadius:12,padding:"2px 8px",whiteSpace:"nowrap"}}>
+                            {dropTitle(id)}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{borderTop:"2px solid var(--border)"}}>
+                  <td style={{fontWeight:700,paddingTop:12}}>Total</td>
+                  <td style={{fontWeight:700,color:"var(--accent)"}}>{fmt(totalRevenue)}</td>
+                  <td style={{fontWeight:700}}>{rows.reduce((s,c)=>s+c.orderCount,0)}</td>
+                  <td colSpan={4}/>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state"><p>No customer orders found for this date range.</p></div>
+      )}
+    </>
+  );
 }
 
 // ============================================================
