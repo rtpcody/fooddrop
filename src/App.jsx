@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v14 — Universal creator login at /#/login,
-//                    creator isolation (no public creator listing),
-//                    auto-redirect to correct dashboard on login
+// FOODDROP MVP v15 — Reports tab with Sales Summary + Item Summary,
+//                    date range presets + custom picker, drop-by-drop
+//                    and item-by-item breakdowns, absorbed revenue modal
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -260,13 +260,12 @@ function useRoute() {
 
 function parseRoute(hash) {
   const path = hash.replace("#/", "").replace(/\/$/, "");
-  if (!path) return { slug: null, isAdmin: false, isLogin: false };
-  if (path === "login") return { slug: null, isAdmin: false, isLogin: true };
+  if (!path) return { slug: null, isAdmin: false };
   const parts = path.split("/");
   if (parts.length >= 2 && parts[parts.length - 1] === "admin") {
-    return { slug: parts.slice(0, -1).join("/"), isAdmin: true, isLogin: false };
+    return { slug: parts.slice(0, -1).join("/"), isAdmin: true };
   }
-  return { slug: parts.join("/"), isAdmin: false, isLogin: false };
+  return { slug: parts.join("/"), isAdmin: false };
 }
 
 // ============================================================
@@ -274,7 +273,7 @@ function parseRoute(hash) {
 // ============================================================
 export default function FoodDropApp() {
   const route = useRoute();
-  const { slug, isAdmin, isLogin } = parseRoute(route);
+  const { slug, isAdmin } = parseRoute(route);
   const [allCreators, setAllCreators] = useState([]);
   const [creator, setCreator] = useState(null);
   const [customers, setCustomers] = useState([]);
@@ -286,6 +285,7 @@ export default function FoodDropApp() {
   const [dbOk, setDbOk] = useState(null);
   const [toast, setToast] = useState(null);
   const [toastType, setToastType] = useState("ok");
+  // Auth state
   const [session, setSession] = useState(() => {
     try { const s = localStorage.getItem("fd_session"); return s ? JSON.parse(s) : null; } catch { return null; }
   });
@@ -293,11 +293,13 @@ export default function FoodDropApp() {
 
   const showToast = useCallback((msg, type = "ok") => { setToast(msg); setToastType(type); setTimeout(() => setToast(null), 3500); }, []);
 
+  // Persist session
   useEffect(() => {
     if (session) localStorage.setItem("fd_session", JSON.stringify(session));
     else localStorage.removeItem("fd_session");
   }, [session]);
 
+  // Validate session on mount
   useEffect(() => {
     const checkSession = async () => {
       if (session?.access_token) {
@@ -309,24 +311,16 @@ export default function FoodDropApp() {
     checkSession();
   }, []);
 
-  // Universal login — signs in, finds creator row by auth_user_id, redirects
   const handleLogin = async (email, password) => {
     const { session: s, error } = await supabase.auth.signIn(email, password);
     if (error) return { error };
     setSession(s);
-    // Find the creator that belongs to this user and redirect to their dashboard
-    const { data: creators } = await supabase.from("creators").select("*").execute();
-    const myCreator = (creators || []).find(c => c.auth_user_id === s.user.id);
-    if (myCreator?.slug) {
-      window.location.hash = `#/${myCreator.slug}/admin`;
-    }
     return { error: null };
   };
 
   const handleLogout = async () => {
     if (session?.access_token) await supabase.auth.signOut(session.access_token);
     setSession(null);
-    window.location.hash = "#/login";
   };
 
   const loadData = useCallback(async () => {
@@ -338,7 +332,7 @@ export default function FoodDropApp() {
 
       let activeCreator = null;
       if (slug) activeCreator = creators.find(c => c.slug === slug);
-      // No longer fall back to first creator when no slug — that was the bug exposing all creators
+      if (!activeCreator && creators.length === 1 && !slug) activeCreator = creators[0];
       setCreator(activeCreator);
 
       if (activeCreator) {
@@ -373,43 +367,25 @@ export default function FoodDropApp() {
 
   if (loading || !authChecked) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
 
-  // /#/login — universal creator login page
-  if (isLogin) {
-    // Already logged in? Find their creator and redirect
-    if (session?.access_token && session?.user) {
-      const myCreator = allCreators.find(c => c.auth_user_id === session.user.id);
-      if (myCreator?.slug) {
-        window.location.hash = `#/${myCreator.slug}/admin`;
-        return null;
-      }
-    }
-    return (
-      <><style>{CSS}</style><div className="app">
-        <UniversalLoginPage onLogin={handleLogin} showToast={showToast}/>
-        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
-      </div></>
-    );
-  }
-
-  // /#/ — root with no slug, show neutral landing (no creator listing)
+  // Landing page
   if (!slug && !creator) {
     return (
       <><style>{CSS}</style><div className="app">
         {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
-        <LandingPage/>
+        <LandingPage creators={allCreators}/>
         {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
       </div></>
     );
   }
 
-  // Creator slug not found
+  // Creator not found
   if (slug && !creator) {
     return (
       <><style>{CSS}</style><div className="app">
         <div className="loading-screen" style={{color:"var(--text)"}}>
           <h2>Page not found</h2>
           <p style={{color:"var(--text-secondary)"}}>No creator found at this URL.</p>
-          <a href="#/login" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>Creator Login</a>
+          <a href="#/" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>← Go Home</a>
         </div>
       </div></>
     );
@@ -423,7 +399,7 @@ export default function FoodDropApp() {
     if (!isLoggedIn) {
       return (
         <><style>{CSS}</style><div className="app">
-          <UniversalLoginPage onLogin={handleLogin} showToast={showToast}/>
+          <LoginPage creator={creator} onLogin={handleLogin} showToast={showToast}/>
           {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
         </div></>
       );
@@ -437,7 +413,7 @@ export default function FoodDropApp() {
             <p style={{color:"var(--text-secondary)"}}>Your account doesn't have access to this dashboard.</p>
             <div style={{display:"flex",gap:12,marginTop:16}}>
               <button className="btn btn-secondary" onClick={handleLogout}>Log Out</button>
-              <a href="#/login" className="btn btn-primary" style={{textDecoration:"none"}}>Back to Login</a>
+              <a href="#/" className="btn btn-primary" style={{textDecoration:"none"}}>Go Home</a>
             </div>
           </div>
         </div></>
@@ -464,9 +440,9 @@ export default function FoodDropApp() {
 }
 
 // ============================================================
-// UNIVERSAL LOGIN PAGE — works for any creator via /#/login
+// LOGIN PAGE
 // ============================================================
-function UniversalLoginPage({ onLogin, showToast }) {
+function LoginPage({ creator, onLogin, showToast }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
@@ -477,7 +453,7 @@ function UniversalLoginPage({ onLogin, showToast }) {
     setLoading(true); setError(null);
     const { error: err } = await onLogin(email, password);
     setLoading(false);
-    if (err) setError("Incorrect email or password. Please try again.");
+    if (err) setError(err.message);
   };
 
   const handleKeyDown = (e) => { if (e.key === "Enter") handleSubmit(); };
@@ -487,41 +463,40 @@ function UniversalLoginPage({ onLogin, showToast }) {
       <div className="login-card">
         <div className="login-brand">
           <div className="login-brand-icon">🍽️</div>
-          <h2>FoodDrop</h2>
+          <h2>{creator?.name || "FoodDrop"}</h2>
           <p>Creator Dashboard</p>
         </div>
         {error && <div className="login-error">{error}</div>}
-        <div className="form-group">
-          <label className="form-label">Email</label>
-          <input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown} autoFocus/>
-        </div>
-        <div className="form-group">
-          <label className="form-label">Password</label>
-          <input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/>
-        </div>
+        <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown}/></div>
+        <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/></div>
         <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={handleSubmit}>{loading?"Signing in...":"Sign In"}</button>
-        <div style={{marginTop:20,textAlign:"center"}}>
-          <a href="https://getfooddrop.com" style={{fontSize:13,color:"var(--text-tertiary)",textDecoration:"none"}}>← Back to FoodDrop.com</a>
-        </div>
       </div>
     </div>
   );
 }
 
 // ============================================================
-// LANDING PAGE — neutral, no creator listing
+// LANDING PAGE
 // ============================================================
-function LandingPage() {
+function LandingPage({ creators }) {
   return (
     <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
-      <div style={{textAlign:"center",maxWidth:400}}>
+      <div style={{textAlign:"center",maxWidth:480}}>
         <div style={{fontSize:48,marginBottom:16}}>🍽️</div>
         <h1 style={{marginBottom:8}}>FoodDrop</h1>
-        <p style={{color:"var(--text-secondary)",fontSize:16,marginBottom:32}}>The platform for independent food creators.</p>
-        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-          <a href="#/login" className="btn btn-primary" style={{textDecoration:"none"}}>Creator Login</a>
-          <a href="https://getfooddrop.com" className="btn btn-secondary" style={{textDecoration:"none"}}>Learn More</a>
-        </div>
+        <p style={{color:"var(--text-secondary)",fontSize:16,marginBottom:32}}>The platform for food creators to manage drops, customers, and orders.</p>
+        {creators.length > 0 && (<>
+          <h3 style={{marginBottom:12,color:"var(--text-secondary)"}}>Active Creators</h3>
+          <div style={{display:"grid",gap:12}}>
+            {creators.filter(c=>c.slug).map(c => (
+              <a key={c.id} href={`#/${c.slug}`} className="card card-hover" style={{textDecoration:"none",color:"var(--text)",textAlign:"left"}}>
+                <h3>{c.name || "Unnamed Creator"}</h3>
+                {c.tagline && <p style={{fontSize:14,color:"var(--text-secondary)",marginTop:4}}>{c.tagline}</p>}
+                <div style={{fontSize:12,color:"var(--accent)",marginTop:8}}>Visit page →</div>
+              </a>
+            ))}
+          </div>
+        </>)}
       </div>
     </div>
   );
@@ -541,7 +516,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [showEditCustomer, setShowEditCustomer] = useState(null);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showEditOrder, setShowEditOrder] = useState(null);
-  const [showRevenue, setShowRevenue] = useState(false);
+  const [showRevenue, setShowRevenue] = useState(false); // kept for legacy, unused
   const [duplicateDrop, setDuplicateDrop] = useState(null);
   const [showImportCSV, setShowImportCSV] = useState(false);
   const [showBulkDelete, setShowBulkDelete] = useState(null); // array of ids
@@ -661,16 +636,17 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     <>
       <div className="creator-topbar"><span className="creator-topbar-brand">🍽️ FoodDrop</span><div className="creator-topbar-actions"><button className="creator-topbar-link" onClick={copyUrl}>{I.share} Copy Customer Link</button><a className="creator-topbar-link" href={customerUrl} target="_blank" rel="noopener noreferrer">{I.eye} View Page</a><button className="creator-topbar-link" onClick={onLogout}>Log Out</button></div></div>
       <nav className="creator-nav">
-        {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"customers",label:"Customers",icon:I.users},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
+        {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"customers",label:"Customers",icon:I.users},{key:"reports",label:"Reports",icon:I.chart},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
           <button key={t.key} className={tab===t.key?"active":""} onClick={()=>{setTab(t.key);setSelectedDrop(null);setSelectedCustomer(null)}}>{t.icon} {t.label}</button>
         ))}
       </nav>
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
-        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setShowRevenue(true)} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")}/>}
+        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}/>}
+        {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
         {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} session={session} showToast={showToast}/>}
       </div>
       {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null)}}/>}
@@ -680,7 +656,6 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       {showEditProfile && <ProfileFormModal creator={creator} onSave={handleEditProfile} onClose={()=>setShowEditProfile(false)}/>}
       {showCompose && <ComposeModal customers={customers} onClose={()=>setShowCompose(false)} onSend={()=>{setShowCompose(false);showToast("Copied to clipboard!")}}/>}
       {showEditOrder && <EditOrderModal order={showEditOrder.order} dropItems={getDropItems(showEditOrder.dropId)} existingOrderItems={getOrderItems(showEditOrder.order.id)} onSave={(items)=>handleEditOrder(showEditOrder.order.id,items,showEditOrder.dropId)} onClose={()=>setShowEditOrder(null)}/>}
-      {showRevenue && <RevenueModal drops={drops} orders={orders} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onClose={()=>setShowRevenue(false)} onViewDrop={d=>{setShowRevenue(false);setSelectedDrop(d);setTab("drops")}}/>}
       {showImportCSV && <ImportCSVModal onImport={handleImportCustomers} onClose={()=>setShowImportCSV(false)}/>}
       {showBulkDelete && <BulkDeleteCustomersModal count={showBulkDelete.length} onConfirm={(deleteOrders)=>{handleBulkDeleteCustomers(showBulkDelete,deleteOrders);setShowBulkDelete(null);}} onClose={()=>setShowBulkDelete(null)}/>}
       {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>{handleDeleteDropPermanently(showDeleteDrop.id);setShowDeleteDrop(null);}} onClose={()=>setShowDeleteDrop(null)}/>}
@@ -734,7 +709,7 @@ function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems
       <div className="stat-card stat-card-clickable" onClick={onShowRevenue}>
         <div className="stat-label">Total Revenue →</div>
         <div className="stat-value">{fmt(totalRev)}</div>
-        <div className="stat-sub">Click for breakdown</div>
+        <div className="stat-sub">View Reports</div>
       </div>
       <div className="stat-card">
         <div className="stat-label">Orders</div>
@@ -765,52 +740,175 @@ function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems
 }
 
 // ============================================================
-// REVENUE MODAL
+// REPORTS TAB — Sales Summary + Item Summary
 // ============================================================
-function RevenueModal({ drops, orders, getDropOrders, getOrderItems, customers, onClose, onViewDrop }) {
-  const nonArchived = drops.filter(d => !d.archived);
-  const confirmedOrders = orders.filter(o => o.status !== "cancelled");
-  const totalRev = confirmedOrders.reduce((s, o) => s + Number(o.total), 0);
 
-  // Revenue per drop — only non-archived, non-permanently-deleted
-  const dropRevenue = nonArchived.map(drop => {
-    const dO = getDropOrders(drop.id).filter(o => o.status !== "cancelled");
-    return { ...drop, revenue: dO.reduce((s, o) => s + Number(o.total), 0), orderCount: dO.length };
-  }).filter(d => d.orderCount > 0).sort((a, b) => b.revenue - a.revenue);
-  const maxDropRev = Math.max(...dropRevenue.map(d => d.revenue), 1);
-  const bestDrop = dropRevenue[0] || null;
+// Date range helpers
+function getDateRange(preset, customStart, customEnd) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (preset) {
+    case "7d": return { start: new Date(today - 6 * 86400000), end: new Date(today.getTime() + 86399999) };
+    case "30d": return { start: new Date(today - 29 * 86400000), end: new Date(today.getTime() + 86399999) };
+    case "90d": return { start: new Date(today - 89 * 86400000), end: new Date(today.getTime() + 86399999) };
+    case "year": return { start: new Date(today.getFullYear(), 0, 1), end: new Date(today.getTime() + 86399999) };
+    case "all": return { start: new Date("2000-01-01"), end: new Date(today.getTime() + 86399999) };
+    case "custom": return { start: customStart ? new Date(customStart + "T00:00:00") : new Date("2000-01-01"), end: customEnd ? new Date(customEnd + "T23:59:59") : new Date(today.getTime() + 86399999) };
+    default: return { start: new Date("2000-01-01"), end: new Date(today.getTime() + 86399999) };
+  }
+}
 
-  // Top selling items
-  const itemSales = {};
-  confirmedOrders.forEach(order => {
-    getOrderItems(order.id).forEach(oi => {
-      const key = oi.item_name;
-      if (!itemSales[key]) itemSales[key] = { name: key, qty: 0, revenue: 0 };
-      itemSales[key].qty += oi.quantity;
-      itemSales[key].revenue += oi.quantity * Number(oi.item_price);
-    });
+function DateRangeSelector({ preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd }) {
+  const presets = [
+    { key: "7d", label: "Last 7 Days" },
+    { key: "30d", label: "Last 30 Days" },
+    { key: "90d", label: "Last 90 Days" },
+    { key: "year", label: "This Year" },
+    { key: "all", label: "All Time" },
+    { key: "custom", label: "Custom" },
+  ];
+  return (
+    <div style={{marginBottom: 24}}>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom: preset==="custom" ? 12 : 0}}>
+        {presets.map(p => (
+          <button key={p.key} onClick={()=>setPreset(p.key)}
+            className={`btn btn-sm ${preset===p.key ? "btn-primary" : "btn-secondary"}`}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {preset === "custom" && (
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginTop:12,padding:"12px 16px",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <label style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)",whiteSpace:"nowrap"}}>From</label>
+            <input type="date" className="form-input" style={{width:160}} value={customStart} onChange={e=>setCustomStart(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <label style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)",whiteSpace:"nowrap"}}>To</label>
+            <input type="date" className="form-input" style={{width:160}} value={customEnd} onChange={e=>setCustomEnd(e.target.value)}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReportsTab({ drops, orders, orderItems, customers, getDropOrders, getDropItems, getOrderItems, onViewDrop }) {
+  const [report, setReport] = useState("sales");
+  const [itemSubview, setItemSubview] = useState("byItem");
+  const [preset, setPreset] = useState("all");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+
+  const { start, end } = getDateRange(preset, customStart, customEnd);
+
+  // Filter orders to date range using created_at
+  const allConfirmed = orders.filter(o => o.status !== "cancelled");
+  const rangeOrders = allConfirmed.filter(o => {
+    const d = new Date(o.created_at);
+    return d >= start && d <= end;
   });
-  const topItems = Object.values(itemSales).sort((a, b) => b.revenue - a.revenue).slice(0, 8);
-  const maxItemRev = Math.max(...topItems.map(i => i.revenue), 1);
 
-  // Customer loyalty
-  const custOrderCounts = {};
-  confirmedOrders.forEach(o => { if (o.customer_id) { custOrderCounts[o.customer_id] = (custOrderCounts[o.customer_id] || 0) + 1; } });
-  const repeatCustomers = Object.values(custOrderCounts).filter(c => c > 1).length;
-  const firstTimeCustomers = Object.values(custOrderCounts).filter(c => c === 1).length;
-  const avgOrderValue = confirmedOrders.length > 0 ? totalRev / confirmedOrders.length : 0;
+  // Also filter drops whose pickup_date falls in range (for context)
+  const nonArchived = drops.filter(d => !d.archived);
 
   return (
-    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:640}}>
-      <div className="modal-header"><h2>Revenue Breakdown</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
-
-      <div className="stats-row" style={{marginBottom:24}}>
-        <div className="stat-card"><div className="stat-label">Total Revenue</div><div className="stat-value">{fmt(totalRev)}</div></div>
-        <div className="stat-card"><div className="stat-label">Avg Order</div><div className="stat-value">{fmt(avgOrderValue)}</div></div>
-        <div className="stat-card"><div className="stat-label">Total Orders</div><div className="stat-value">{confirmedOrders.length}</div></div>
+    <div>
+      <div style={{marginBottom:28}}>
+        <h1>Reports</h1>
+        <p style={{color:"var(--text-secondary)",marginTop:4}}>Review your sales performance and item breakdown.</p>
       </div>
 
-      {/* Best Drop Highlight */}
+      {/* Report type selector */}
+      <div className="view-tabs" style={{maxWidth:360,marginBottom:28}}>
+        <button className={`view-tab ${report==="sales"?"active":""}`} onClick={()=>setReport("sales")}>Sales Summary</button>
+        <button className={`view-tab ${report==="items"?"active":""}`} onClick={()=>setReport("items")}>Item Summary</button>
+      </div>
+
+      {report === "sales" && (
+        <SalesSummary
+          drops={nonArchived} orders={rangeOrders} allOrders={allConfirmed}
+          customers={customers} getDropOrders={getDropOrders} getOrderItems={getOrderItems}
+          onViewDrop={onViewDrop} preset={preset} setPreset={setPreset}
+          customStart={customStart} setCustomStart={setCustomStart}
+          customEnd={customEnd} setCustomEnd={setCustomEnd}
+          start={start} end={end}
+        />
+      )}
+      {report === "items" && (
+        <ItemSummary
+          drops={nonArchived} orders={rangeOrders} getDropItems={getDropItems}
+          getOrderItems={getOrderItems} onViewDrop={onViewDrop}
+          subview={itemSubview} setSubview={setItemSubview}
+          preset={preset} setPreset={setPreset}
+          customStart={customStart} setCustomStart={setCustomStart}
+          customEnd={customEnd} setCustomEnd={setCustomEnd}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Sales Summary ──────────────────────────────────────────────
+function SalesSummary({ drops, orders, allOrders, customers, getDropOrders, getOrderItems, onViewDrop, preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd, start, end }) {
+  const totalRev = orders.reduce((s, o) => s + Number(o.total), 0);
+  const avgOrder = orders.length > 0 ? totalRev / orders.length : 0;
+
+  // Customer loyalty within range
+  const custOrderCounts = {};
+  orders.forEach(o => { if (o.customer_id) custOrderCounts[o.customer_id] = (custOrderCounts[o.customer_id] || 0) + 1; });
+  const repeatCustomers = Object.values(custOrderCounts).filter(c => c > 1).length;
+  const firstTimeCustomers = Object.values(custOrderCounts).filter(c => c === 1).length;
+
+  // Uncollected cash — active drops only
+  const activeDrops = drops.filter(d => d.status === "active");
+  const uncollected = activeDrops.reduce((sum, drop) => {
+    const dOrders = getDropOrders(drop.id).filter(o => o.status !== "cancelled" && o.status !== "picked_up");
+    return sum + dOrders.reduce((s, o) => s + Number(o.total), 0);
+  }, 0);
+
+  // Drop-by-drop breakdown filtered to range
+  const dropRows = drops.map(drop => {
+    const dOrders = getDropOrders(drop.id).filter(o => {
+      if (o.status === "cancelled") return false;
+      const d = new Date(o.created_at);
+      return d >= start && d <= end;
+    });
+    return { ...drop, revenue: dOrders.reduce((s, o) => s + Number(o.total), 0), orderCount: dOrders.length };
+  }).filter(d => d.orderCount > 0).sort((a, b) => new Date(b.pickup_date) - new Date(a.pickup_date));
+
+  // Best drop in range
+  const bestDrop = [...dropRows].sort((a, b) => b.revenue - a.revenue)[0] || null;
+
+  return (
+    <>
+      <DateRangeSelector preset={preset} setPreset={setPreset} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
+
+      {/* Top stats */}
+      <div className="stats-row" style={{marginBottom:24}}>
+        <div className="stat-card">
+          <div className="stat-label">Total Revenue</div>
+          <div className="stat-value">{fmt(totalRev)}</div>
+          <div className="stat-sub">{orders.length} order{orders.length!==1?"s":""}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Avg Order Value</div>
+          <div className="stat-value">{fmt(avgOrder)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Total Orders</div>
+          <div className="stat-value">{orders.length}</div>
+        </div>
+        {uncollected > 0 && (
+          <div className="stat-card" style={{borderLeft:"4px solid var(--gold)"}}>
+            <div className="stat-label" style={{color:"var(--gold)"}}>Uncollected Cash</div>
+            <div className="stat-value" style={{color:"var(--gold)"}}>{fmt(uncollected)}</div>
+            <div className="stat-sub">Active drop(s) — cash due at pickup</div>
+          </div>
+        )}
+      </div>
+
+      {/* Best Drop */}
       {bestDrop && (
         <div style={{background:"var(--gold-light)",border:"1px solid #f0dca0",borderRadius:"var(--radius)",padding:"16px 20px",marginBottom:24,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>onViewDrop(bestDrop)}>
           <div>
@@ -822,7 +920,7 @@ function RevenueModal({ drops, orders, getDropOrders, getOrderItems, customers, 
         </div>
       )}
 
-      {/* Customer Loyalty */}
+      {/* Customer loyalty */}
       {(repeatCustomers > 0 || firstTimeCustomers > 0) && (
         <div style={{marginBottom:24}}>
           <h3 style={{marginBottom:12}}>Customer Loyalty</h3>
@@ -841,31 +939,196 @@ function RevenueModal({ drops, orders, getDropOrders, getOrderItems, customers, 
         </div>
       )}
 
-      {dropRevenue.length > 0 && (<div style={{marginBottom:24}}>
-        <h3 style={{marginBottom:12}}>Revenue by Drop</h3>
-        {dropRevenue.map(drop => (
-          <div key={drop.id} className="rev-bar-row" style={{cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
-            <div className="rev-bar-label" title={drop.title}>{drop.title}</div>
-            <div className="rev-bar-track"><div className="rev-bar-fill" style={{width:`${(drop.revenue/maxDropRev)*100}%`}}/></div>
-            <div className="rev-bar-val">{fmt(drop.revenue)}</div>
+      {/* Drop-by-drop table */}
+      {dropRows.length > 0 ? (
+        <div>
+          <h3 style={{marginBottom:12}}>Revenue by Drop</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Drop</th>
+                  <th>Pickup Date</th>
+                  <th>Orders</th>
+                  <th>Revenue</th>
+                  <th>Avg Order</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dropRows.map(drop => (
+                  <tr key={drop.id} style={{cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
+                    <td><div style={{fontWeight:600}}>{drop.title}</div></td>
+                    <td style={{color:"var(--text-secondary)",fontSize:13}}>{fmtDate(drop.pickup_date)}</td>
+                    <td>{drop.orderCount}</td>
+                    <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(drop.revenue)}</td>
+                    <td style={{color:"var(--text-secondary)"}}>{fmt(drop.orderCount > 0 ? drop.revenue / drop.orderCount : 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{borderTop:"2px solid var(--border)"}}>
+                  <td colSpan={2} style={{fontWeight:700,paddingTop:12}}>Total</td>
+                  <td style={{fontWeight:700}}>{dropRows.reduce((s,d)=>s+d.orderCount,0)}</td>
+                  <td style={{fontWeight:700,color:"var(--accent)"}}>{fmt(dropRows.reduce((s,d)=>s+d.revenue,0))}</td>
+                  <td/>
+                </tr>
+              </tfoot>
+            </table>
           </div>
-        ))}
-      </div>)}
-
-      {topItems.length > 0 && (<div>
-        <h3 style={{marginBottom:12}}>Top Selling Items</h3>
-        {topItems.map((item, i) => (
-          <div key={i} className="rev-bar-row">
-            <div className="rev-bar-label" title={item.name}>{item.name}</div>
-            <div className="rev-bar-track"><div className="rev-bar-fill" style={{width:`${(item.revenue/maxItemRev)*100}%`,background:"var(--green)"}}/></div>
-            <div className="rev-bar-val">{item.qty} sold · {fmt(item.revenue)}</div>
-          </div>
-        ))}
-      </div>)}
-
-      {dropRevenue.length === 0 && <div className="empty-state"><p>No revenue data yet. Revenue will appear here after your first orders.</p></div>}
-    </div></div>
+        </div>
+      ) : (
+        <div className="empty-state"><p>No sales data for this date range.</p></div>
+      )}
+    </>
   );
+}
+
+// ── Item Summary ───────────────────────────────────────────────
+function ItemSummary({ drops, orders, getDropItems, getOrderItems, onViewDrop, subview, setSubview, preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd }) {
+
+  // Build item-level data across all orders in range
+  const itemSales = {};
+  orders.forEach(order => {
+    getOrderItems(order.id).forEach(oi => {
+      const key = oi.item_name;
+      if (!itemSales[key]) itemSales[key] = { name: key, qty: 0, revenue: 0, orders: 0 };
+      itemSales[key].qty += oi.quantity;
+      itemSales[key].revenue += oi.quantity * Number(oi.item_price);
+      itemSales[key].orders += 1;
+    });
+  });
+  const itemRows = Object.values(itemSales).sort((a, b) => b.revenue - a.revenue);
+  const maxItemRev = Math.max(...itemRows.map(i => i.revenue), 1);
+
+  // Build drop-level data
+  const { start, end } = getDateRange(preset, customStart, customEnd);
+  const dropRows = drops.map(drop => {
+    const dOrders = getDropOrders_local(drop.id, orders, getOrderItems);
+    const filtered = dOrders.filter(o => {
+      if (o.status === "cancelled") return false;
+      const d = new Date(o.created_at);
+      return d >= start && d <= end;
+    });
+    const dItems = getDropItems(drop.id);
+    const itemBreakdown = dItems.map(di => {
+      const sold = filtered.reduce((sum, o) => {
+        const oi = getOrderItems(o.id).find(x => x.drop_item_id === di.id);
+        return sum + (oi ? oi.quantity : 0);
+      }, 0);
+      return { name: di.name, price: di.price, sold, revenue: sold * Number(di.price) };
+    }).filter(i => i.sold > 0);
+    const revenue = filtered.reduce((s, o) => s + Number(o.total), 0);
+    return { ...drop, orderCount: filtered.length, revenue, itemBreakdown };
+  }).filter(d => d.orderCount > 0).sort((a, b) => new Date(b.pickup_date) - new Date(a.pickup_date));
+
+  return (
+    <>
+      <DateRangeSelector preset={preset} setPreset={setPreset} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
+
+      {/* Sub-view toggle */}
+      <div className="view-tabs" style={{maxWidth:300,marginBottom:24}}>
+        <button className={`view-tab ${subview==="byItem"?"active":""}`} onClick={()=>setSubview("byItem")}>By Item</button>
+        <button className={`view-tab ${subview==="byDrop"?"active":""}`} onClick={()=>setSubview("byDrop")}>By Drop</button>
+      </div>
+
+      {/* By Item view */}
+      {subview === "byItem" && (
+        itemRows.length > 0 ? (
+          <div>
+            <h3 style={{marginBottom:12}}>All Items — Sales Totals</h3>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Units Sold</th>
+                    <th>Revenue</th>
+                    <th style={{width:200}}>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemRows.map((item, i) => (
+                    <tr key={i}>
+                      <td style={{fontWeight:600}}>{item.name}</td>
+                      <td>{item.qty}</td>
+                      <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(item.revenue)}</td>
+                      <td>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <div style={{flex:1,height:8,background:"var(--surface-alt)",borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",background:"var(--accent)",borderRadius:4,width:`${(item.revenue/maxItemRev)*100}%`}}/>
+                          </div>
+                          <span style={{fontSize:12,color:"var(--text-tertiary)",width:36,textAlign:"right"}}>{Math.round((item.revenue/maxItemRev)*100)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{borderTop:"2px solid var(--border)"}}>
+                    <td style={{fontWeight:700,paddingTop:12}}>Total</td>
+                    <td style={{fontWeight:700}}>{itemRows.reduce((s,i)=>s+i.qty,0)}</td>
+                    <td style={{fontWeight:700,color:"var(--accent)"}}>{fmt(itemRows.reduce((s,i)=>s+i.revenue,0))}</td>
+                    <td/>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        ) : <div className="empty-state"><p>No item sales data for this date range.</p></div>
+      )}
+
+      {/* By Drop view */}
+      {subview === "byDrop" && (
+        dropRows.length > 0 ? (
+          <div style={{display:"grid",gap:16}}>
+            <h3>Items Sold — by Drop</h3>
+            {dropRows.map(drop => (
+              <div key={drop.id} className="card">
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:16}}>{drop.title}</div>
+                    <div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{fmtDate(drop.pickup_date)} · {drop.orderCount} orders · {fmt(drop.revenue)}</div>
+                  </div>
+                  <span style={{fontSize:12,color:"var(--accent)",fontWeight:600}}>View Drop →</span>
+                </div>
+                {drop.itemBreakdown.length > 0 ? (
+                  <div className="table-wrap" style={{border:"none",borderRadius:0,background:"transparent"}}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Item</th>
+                          <th>Price</th>
+                          <th>Sold</th>
+                          <th>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {drop.itemBreakdown.map((item, i) => (
+                          <tr key={i}>
+                            <td style={{fontWeight:500}}>{item.name}</td>
+                            <td style={{color:"var(--text-secondary)"}}>{fmt(item.price)}</td>
+                            <td>{item.sold}</td>
+                            <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(item.revenue)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div style={{fontSize:13,color:"var(--text-tertiary)"}}>No item data available.</div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : <div className="empty-state"><p>No drop data for this date range.</p></div>
+      )}
+    </>
+  );
+}
+
+// Helper used inside ItemSummary to get orders for a drop without prop drilling getDropOrders
+function getDropOrders_local(dropId, orders) {
+  return orders.filter(o => o.drop_id === dropId);
 }
 
 // ============================================================
