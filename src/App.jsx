@@ -1761,6 +1761,7 @@ function CustomerSignupForm({ creator, customers, showToast, loadData, onDone })
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [preferContact, setPreferContact] = useState("email");
+  const [optedIn, setOptedIn] = useState(false);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
 
