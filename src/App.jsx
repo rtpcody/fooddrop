@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v18 — Welcome email trigger wired into checkout and signup,
-//                    send-welcome-email.js Vercel function
+// FOODDROP MVP v19 — Pan-to-crop image picker replacing ImageUpload,
+//                    frame previews with recommended size hints,
+//                    per-context aspect ratios on all image fields
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -237,6 +238,8 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 
 .theme-swatch{width:28px;height:28px;border-radius:50%;border:3px solid transparent;cursor:pointer;transition:transform .15s;flex-shrink:0}.theme-swatch:hover{transform:scale(1.15)}.theme-swatch.selected{border-color:var(--text)}
 .theme-preview-bar{height:6px;border-radius:3px;margin-top:8px}
+
+.pan-frame{position:relative;overflow:hidden;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:grab;user-select:none;background:var(--surface-alt)}.pan-frame.dragging{cursor:grabbing}.pan-frame img{position:absolute;pointer-events:none;user-select:none}.pan-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .2s}.pan-frame:hover .pan-hint{opacity:1}.pan-hint-inner{background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:5px 14px;border-radius:20px;font-family:var(--font-body)}.pan-size-badge{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.45);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;pointer-events:none;font-family:var(--font-body)}.pan-actions{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}.pan-size-hint{font-size:11px;color:var(--text-tertiary);margin-top:4px}
 
 `;
 
@@ -1718,10 +1721,10 @@ function SettingsTab({ creator, onEditProfile, onSaveWelcomeEmail, session, show
       </div>
 
       {/* Logo */}
-      <ImageUpload value={logoUrl} onChange={setLogoUrl} label="Your Logo (optional)"/>
+      <ImageUpload value={logoUrl} onChange={setLogoUrl} label="Your Logo (optional)" frameRatio="circle"/>
 
       {/* Welcome photo */}
-      <ImageUpload value={welcomePhotoUrl} onChange={setWelcomePhotoUrl} label="Photo of You or Your Food (optional)"/>
+      <ImageUpload value={welcomePhotoUrl} onChange={setWelcomePhotoUrl} label="Photo of You or Your Food (optional)" frameRatio="4:3"/>
 
       {/* Bio */}
       <div className="form-group">
@@ -1848,68 +1851,175 @@ function PermanentDeleteDropModal({ drop, onConfirm, onClose }) {
 // ============================================================
 
 // --- Image Upload Component ---
-function ImageUpload({ value, onChange, label }) {
+// ============================================================
+// IMAGE UPLOAD WITH PAN-TO-CROP
+// ============================================================
+// frameRatio: "1:1" | "2:1" | "3:1" | "4:3" | "16:9" | "circle"
+// value: image URL string
+// panValue: { x: 0-100, y: 0-100 } — stored in parallel state by parent
+// onChange(url): called when new image is uploaded or removed
+// onPanChange({ x, y }): called as creator drags
+
+const FRAME_META = {
+  "3:1":   { w: 480, h: 160, label: "3:1 wide banner",   hint: "Recommended: 1200×400px — use a landscape photo" },
+  "2:1":   { w: 480, h: 240, label: "2:1 landscape",     hint: "Recommended: 1200×600px — food close-ups work great" },
+  "1:1":   { w: 280, h: 280, label: "1:1 square",        hint: "Recommended: 800×800px — center your subject when shooting" },
+  "4:3":   { w: 480, h: 360, label: "4:3 landscape",     hint: "Recommended: 800×600px — landscape fills email cleanly" },
+  "circle":{ w: 120, h: 120, label: "Circle / logo",     hint: "Recommended: 400×400px — square image, centered subject" },
+};
+
+function ImageUploadWithPan({ value, onChange, panValue, onPanChange, label, frameRatio = "1:1" }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [naturalW, setNaturalW] = useState(0);
+  const [naturalH, setNaturalH] = useState(0);
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const dragRef = useRef(null);
+  const frameRef = useRef(null);
+  const imgRef = useRef(null);
 
-  const compressImage = (file, maxWidth = 1200) => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.width, h = img.height;
-        if (w > maxWidth) { h = (h * maxWidth) / w; w = maxWidth; }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
-      };
-      img.onerror = () => resolve(null);
-      img.src = URL.createObjectURL(file);
-    });
-  };
+  const pan = panValue || { x: 50, y: 50 };
+  const fm = FRAME_META[frameRatio] || FRAME_META["1:1"];
+  const isCircle = frameRatio === "circle";
+
+  // Compress before upload — same logic as before
+  const compressImage = (file, maxWidth = 1200) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let w = img.width, h = img.height;
+      if (w > maxWidth) { h = (h * maxWidth) / w; w = maxWidth; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
+    };
+    img.onerror = () => resolve(null);
+    img.src = URL.createObjectURL(file);
+  });
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setError(null);
-
-    // Check file type
     if (!file.type.startsWith("image/")) { setError("Please select an image file."); return; }
-
-    setUploading(true);
-
-    // Compress if larger than 1MB
+    setError(null); setUploading(true);
     let uploadFile = file;
     if (file.size > 1024 * 1024) {
       const compressed = await compressImage(file);
-      if (compressed) {
-        uploadFile = new File([compressed], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
-      }
+      if (compressed) uploadFile = new File([compressed], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
     }
-
     const { url, error: uploadErr } = await supabase.uploadImage(uploadFile);
     setUploading(false);
-    if (url) { onChange(url); setError(null); }
+    if (url) { onChange(url); onPanChange && onPanChange({ x: 50, y: 50 }); setImgLoaded(false); setError(null); }
     else { setError("Upload failed. Try a smaller image or different format."); console.error("Upload error:", uploadErr); }
   };
+
+  // When image loads, record natural dimensions
+  const handleImgLoad = (e) => {
+    setNaturalW(e.target.naturalWidth);
+    setNaturalH(e.target.naturalHeight);
+    setImgLoaded(true);
+  };
+
+  // Compute scaled image size and position inside the frame
+  const getImgStyle = () => {
+    if (!imgLoaded || !naturalW || !naturalH) return { width: "100%", height: "100%", objectFit: "cover", objectPosition: `${pan.x}% ${pan.y}%` };
+    const scale = Math.max(fm.w / naturalW, fm.h / naturalH);
+    const iw = naturalW * scale;
+    const ih = naturalH * scale;
+    const maxOffX = 0, minOffX = fm.w - iw;
+    const maxOffY = 0, minOffY = fm.h - ih;
+    const ox = Math.max(minOffX, Math.min(maxOffX, (fm.w - iw) * (pan.x / 100)));
+    const oy = Math.max(minOffY, Math.min(maxOffY, (fm.h - ih) * (pan.y / 100)));
+    return { width: iw, height: ih, left: ox, top: oy };
+  };
+
+  // Drag handlers
+  const startDrag = (clientX, clientY) => {
+    if (!imgLoaded) return;
+    const scale = Math.max(fm.w / naturalW, fm.h / naturalH);
+    const iw = naturalW * scale, ih = naturalH * scale;
+    const style = getImgStyle();
+    dragRef.current = { startX: clientX, startY: clientY, startOX: style.left || 0, startOY: style.top || 0, iw, ih };
+    frameRef.current?.classList.add("dragging");
+  };
+
+  const onDrag = (clientX, clientY) => {
+    if (!dragRef.current) return;
+    const { startX, startY, startOX, startOY, iw, ih } = dragRef.current;
+    const dx = clientX - startX, dy = clientY - startY;
+    const newOX = Math.max(fm.w - iw, Math.min(0, startOX + dx));
+    const newOY = Math.max(fm.h - ih, Math.min(0, startOY + dy));
+    const fracX = iw <= fm.w ? 50 : Math.round((newOX / (fm.w - iw)) * 100);
+    const fracY = ih <= fm.h ? 50 : Math.round((newOY / (fm.h - ih)) * 100);
+    onPanChange && onPanChange({ x: Math.max(0, Math.min(100, fracX)), y: Math.max(0, Math.min(100, fracY)) });
+  };
+
+  const endDrag = () => { dragRef.current = null; frameRef.current?.classList.remove("dragging"); };
 
   return (
     <div className="form-group">
       <label className="form-label">{label || "Image"}</label>
-      {value ? (
-        <div style={{position:"relative"}}>
-          <img src={value} alt="" className="img-upload-preview" style={{width:"100%",height:120,objectFit:"cover",borderRadius:"var(--radius-sm)"}}/>
-          <button className="btn btn-sm btn-ghost" onClick={()=>onChange("")} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.6)",color:"#fff",borderRadius:20,padding:"4px 8px"}}>{I.x}</button>
-        </div>
-      ) : (
+
+      {!value ? (
         <div className="img-upload">
           <input type="file" accept="image/*" onChange={handleFile}/>
-          <div>{uploading ? <><div className="spin" style={{width:20,height:20,margin:"0 auto 8px"}}/> Compressing & uploading...</> : <><span style={{color:"var(--accent)"}}>{I.image}</span><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>Click or drag to upload</div></>}</div>
+          <div>{uploading
+            ? <><div className="spin" style={{width:20,height:20,margin:"0 auto 8px"}}/> Uploading...</>
+            : <><span style={{color:"var(--accent)"}}>{I.image}</span><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>Click or drag to upload</div></>
+          }</div>
+        </div>
+      ) : (
+        <div>
+          {/* Pan-to-crop frame */}
+          <div
+            ref={frameRef}
+            className="pan-frame"
+            style={{ width: fm.w, maxWidth: "100%", height: fm.h, borderRadius: isCircle ? "50%" : "var(--radius-sm)" }}
+            onMouseDown={e => { startDrag(e.clientX, e.clientY); e.preventDefault(); }}
+            onMouseMove={e => { if (dragRef.current) onDrag(e.clientX, e.clientY); }}
+            onMouseUp={endDrag}
+            onMouseLeave={endDrag}
+            onTouchStart={e => startDrag(e.touches[0].clientX, e.touches[0].clientY)}
+            onTouchMove={e => { if (dragRef.current) { onDrag(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); } }}
+            onTouchEnd={endDrag}
+          >
+            <img
+              ref={imgRef}
+              src={value}
+              alt=""
+              onLoad={handleImgLoad}
+              style={{ ...getImgStyle(), position: imgLoaded ? "absolute" : "relative", objectFit: imgLoaded ? undefined : "cover", width: imgLoaded ? getImgStyle().width : "100%", height: imgLoaded ? getImgStyle().height : "100%" }}
+              draggable={false}
+            />
+            <div className="pan-size-badge">{fm.label}</div>
+            <div className="pan-hint"><div className="pan-hint-inner">Drag to reposition</div></div>
+          </div>
+
+          {/* Size hint + remove button */}
+          <div className="pan-actions">
+            <label className="btn btn-secondary btn-sm" style={{cursor:"pointer",position:"relative"}}>
+              {I.upload} Replace
+              <input type="file" accept="image/*" onChange={handleFile} style={{position:"absolute",inset:0,opacity:0,cursor:"pointer"}}/>
+            </label>
+            <button className="btn btn-ghost btn-sm" onClick={()=>{ onChange(""); onPanChange && onPanChange({x:50,y:50}); setImgLoaded(false); }} style={{color:"var(--red)"}}>
+              {I.x} Remove
+            </button>
+          </div>
+          <div className="pan-size-hint">{fm.hint}</div>
         </div>
       )}
+
+      {/* Show size hint even before upload */}
+      {!value && <div className="pan-size-hint" style={{marginTop:4}}>{fm.hint}</div>}
       {error && <div style={{fontSize:12,color:"var(--red)",marginTop:6}}>{error}</div>}
     </div>
   );
+}
+
+// Backwards-compatible alias — plain ImageUpload still works for non-image contexts (CSV etc.)
+function ImageUpload({ value, onChange, label, frameRatio = "1:1" }) {
+  const [pan, setPan] = useState({ x: 50, y: 50 });
+  return <ImageUploadWithPan value={value} onChange={onChange} panValue={pan} onPanChange={setPan} label={label} frameRatio={frameRatio}/>;
 }
 
 // --- Drop Form (create + edit, with images) ---
@@ -1945,7 +2055,7 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
       <div className="modal-header"><h2>{mode==="edit"?"Edit Drop":duplicateFrom?"Duplicate Drop":"Create New Drop"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Drop Title</label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
-      <ImageUpload value={imageUrl} onChange={setImageUrl} label="Drop Cover Image (optional)"/>
+      <ImageUpload value={imageUrl} onChange={setImageUrl} label="Drop Cover Image (optional)" frameRatio="2:1"/>
       <div className="form-row"><div className="form-group"><label className="form-label">Pickup Date</label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div><div className="form-group"><label className="form-label">Pickup Time</label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div></div>
       <div className="form-group"><label className="form-label">Pickup Location</label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
       <div style={{marginBottom:20}}>
@@ -1956,7 +2066,7 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
           <textarea className="form-textarea" placeholder="Description (optional) — ingredients, allergens, serving size..." value={item.description} onChange={e=>updateItem(item.id,"description",e.target.value)} style={{marginBottom:8,minHeight:56,fontSize:13}}/>
           <div className="form-row"><input className="form-input" type="number" placeholder="Price" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>
           <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
-          <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} label="Item Image (optional)"/>
+          <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} label="Item Image (optional)" frameRatio="1:1"/>
         </div>))}
       </div>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Drop")}</button>
@@ -2068,7 +2178,7 @@ function ProfileFormModal({ creator, onSave, onClose }) {
       <div className="form-group"><label className="form-label">Page URL Slug</label><input className="form-input" placeholder="my-kitchen" value={slug} onChange={e=>setSlug(e.target.value)}/><div className="form-hint">Letters, numbers, and dashes only.</div></div>
 
       {/* Hero Image */}
-      <ImageUpload value={heroImageUrl} onChange={setHeroImageUrl} label="Storefront Hero Image (optional)"/>
+      <ImageUpload value={heroImageUrl} onChange={setHeroImageUrl} label="Storefront Hero Image (optional)" frameRatio="3:1"/>
 
       {/* Theme Picker */}
       <div className="form-group">
