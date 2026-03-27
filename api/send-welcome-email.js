@@ -136,7 +136,6 @@ export default async function handler(req, res) {
                 <tr>
                   <td style="padding:0 0 28px;text-align:center">
                     <a href="${creatorStorefrontUrl}" style="display:inline-block;background:#C4856A;color:#FFFFFF;font-family:Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.06em;text-decoration:none;padding:14px 36px;border-radius:2px;text-transform:uppercase">View my storefront →</a>
-                    <p style="font-family:Arial,sans-serif;font-size:11px;color:#A07850;margin:10px 0 0;font-style:italic">${creatorStorefrontUrl}</p>
                   </td>
                 </tr>
 
