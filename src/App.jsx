@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v17 — Welcome email setup in Settings tab,
-//                    fifth onboarding step, handleSaveWelcomeEmail handler
+// FOODDROP MVP v18 — Welcome email trigger wired into checkout and signup,
+//                    send-welcome-email.js Vercel function
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -142,6 +142,32 @@ const formatPhone = (raw) => {
 const fmt = (n) => `$${Number(n).toFixed(2)}`;
 const fmtDate = (d) => { if (!d) return ""; return new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); };
 const fmtDateLong = (d) => { if (!d) return ""; return new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }); };
+
+// Sends the creator introduction email — non-blocking, fire-and-forget.
+// Checks welcome_sent flag first to ensure it only fires once per customer.
+async function sendWelcomeEmail({ creator, customerName, customerEmail }) {
+  if (!creator?.bio) return; // Creator hasn't set up their welcome email yet
+  if (!customerEmail) return;
+  try {
+    const storefrontUrl = `${window.location.origin}${window.location.pathname}#/${creator.slug || ""}`;
+    await fetch("/api/send-welcome-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: customerEmail,
+        customerName,
+        creatorName: creator.name || "FoodDrop",
+        creatorTagline: creator.tagline || "",
+        creatorBio: creator.bio || "",
+        creatorHowDropsWork: creator.how_drops_work || "",
+        creatorLogoUrl: creator.logo_url || "",
+        creatorPhotoUrl: creator.welcome_photo_url || "",
+        creatorStorefrontUrl: storefrontUrl,
+        socialLinks: creator.social_links || {},
+      }),
+    });
+  } catch (e) { console.error("Welcome email failed:", e); }
+}
 
 // ============================================================
 // STYLES
@@ -2262,6 +2288,14 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
       });
     } catch (emailErr) { console.error("Email send failed:", emailErr); }
 
+    // Send welcome email — only if this is their first order (new customer)
+    // existing is defined above: null if they were just created, truthy if pre-existing
+    if (!existing && customerId) {
+      // Mark welcome_sent so it never fires twice
+      await supabase.from("customers").update({ welcome_sent: true }).eq("id", customerId).execute();
+      sendWelcomeEmail({ creator, customerName: name, customerEmail: email });
+    }
+
     setPlacing(false);onOrderPlaced(orderDetail);
   };
 
@@ -2335,11 +2369,15 @@ function CustomerSignupForm({ creator, customers, showToast, loadData, onDone })
     try {
       const existing = customers.find(c => c.email.toLowerCase() === email.toLowerCase());
       if (existing) {
+        // Existing customer updating their prefs — no welcome email
         const { error } = await supabase.from("customers").update({ name, phone, prefer_contact: preferContact, opted_in: true }).eq("id", existing.id).execute();
         if (error) { console.error("Signup update error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
       } else if (creator) {
-        const { error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "" }).execute();
+        // Brand new customer — insert, then send welcome email
+        const { data: nc, error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "", welcome_sent: true }).select("*").single().execute();
         if (error) { console.error("Signup insert error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
+        // Fire welcome email non-blocking
+        if (nc) sendWelcomeEmail({ creator, customerName: name, customerEmail: email });
       }
       setSaving(false); setDone(true); loadData();
     } catch (e) { console.error("Signup exception:", e); showToast("Something went wrong.", "error"); setSaving(false); }
