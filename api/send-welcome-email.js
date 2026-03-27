@@ -115,7 +115,7 @@ export default async function handler(req, res) {
                 <!-- Bio section label -->
                 <tr>
                   <td style="padding:0 0 12px">
-                    <p style="font-family:Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#C4856A;margin:0">A little about me</p>
+                    <p style="font-family:Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#C4856A;margin:0">A little about ${creatorName}</p>
                   </td>
                 </tr>
 
