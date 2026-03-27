@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ============================================================
-// FOODDROP MVP v16 — Customer Summary added to Reports tab
+// FOODDROP MVP v17 — Welcome email setup in Settings tab,
+//                    fifth onboarding step, handleSaveWelcomeEmail handler
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -569,6 +570,18 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
   const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline, slug: d.slug, theme: d.theme, hero_image_url: d.heroImageUrl || "" }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated! Slug changes take effect on reload."); loadData(); };
+
+  const handleSaveWelcomeEmail = async (d) => {
+    if (!creator) return;
+    await supabase.from("creators").update({
+      logo_url: d.logoUrl || "",
+      bio: d.bio || "",
+      how_drops_work: d.howDropsWork || "",
+      social_links: d.socialLinks || {},
+      welcome_photo_url: d.welcomePhotoUrl || "",
+    }).eq("id", creator.id).execute();
+    showToast("Welcome email saved!"); loadData();
+  };
   const handleUpdateOrderStatus = async (oid, status) => { await supabase.from("orders").update({ status }).eq("id", oid).execute(); showToast(`Order marked as ${status.replace("_"," ")}.`); loadData(); };
   const handleEndDrop = async (id) => { await supabase.from("drops").update({ status: "ended" }).eq("id", id).execute(); showToast("Drop ended."); setSelectedDrop(null); loadData(); };
   const handleArchiveDrop = async (id) => { await supabase.from("drops").update({ archived: true }).eq("id", id).execute(); showToast("Drop archived."); setSelectedDrop(null); loadData(); };
@@ -639,13 +652,13 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
         ))}
       </nav>
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
-        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")}/>}
+        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
-        {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} session={session} showToast={showToast}/>}
+        {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} onSaveWelcomeEmail={handleSaveWelcomeEmail} session={session} showToast={showToast}/>}
       </div>
       {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null)}}/>}
       {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
@@ -664,7 +677,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
 // ============================================================
 // DASHBOARD TAB — Clean with getting started + clickable revenue
 // ============================================================
-function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems, getDropOrders, getDropItems, getOrderItems, onViewDrop, onShowRevenue, onGoToDrops, onNewDrop, onGoToSettings, onGoToCustomers }) {
+function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems, getDropOrders, getDropItems, getOrderItems, onViewDrop, onShowRevenue, onGoToDrops, onNewDrop, onGoToSettings, onGoToCustomers, onGoToWelcomeEmail }) {
   const activeDrops = drops.filter(d => d.status === "active" && !d.archived);
   const nonArchived = drops.filter(d => !d.archived);
   const confirmedOrders = orders.filter(o => o.status !== "cancelled");
@@ -673,14 +686,16 @@ function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems
   const hasProfile = creator?.name && creator.name !== "My Food Business";
   const hasDrops = drops.length > 0;
   const hasOrders = orders.length > 0;
+  const hasWelcomeEmail = !!(creator?.bio);
   const isNewCreator = !hasDrops;
 
   // Getting started steps
   const steps = [
     { num: 1, title: "Set up your profile", desc: "Add your business name and tagline so customers know who you are.", done: hasProfile, action: onGoToSettings },
-    { num: 2, title: "Create your first drop", desc: "Add menu items, set a pickup date and location, and upload food photos.", done: hasDrops, action: onNewDrop },
-    { num: 3, title: "Share your page with customers", desc: "Copy your customer link and send it out via text or email.", done: hasDrops && customers.length > 0, action: null },
-    { num: 4, title: "Manage incoming orders", desc: "Track who ordered, view your prep summary, and mark pickups complete.", done: hasOrders, action: onGoToDrops },
+    { num: 2, title: "Write your welcome email", desc: "Introduce yourself to new customers — they'll receive this within an hour of joining your list or placing their first order.", done: hasWelcomeEmail, action: onGoToWelcomeEmail },
+    { num: 3, title: "Create your first drop", desc: "Add menu items, set a pickup date and location, and upload food photos.", done: hasDrops, action: onNewDrop },
+    { num: 4, title: "Share your page with customers", desc: "Copy your customer link and send it out via text or email.", done: hasDrops && customers.length > 0, action: null },
+    { num: 5, title: "Manage incoming orders", desc: "Track who ordered, view your prep summary, and mark pickups complete.", done: hasOrders, action: onGoToDrops },
   ];
 
   return (<>
@@ -1582,12 +1597,33 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
 // ============================================================
 // SETTINGS TAB
 // ============================================================
-function SettingsTab({ creator, onEditProfile, session, showToast }) {
+function SettingsTab({ creator, onEditProfile, onSaveWelcomeEmail, session, showToast }) {
   const customerUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}`;
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Welcome email state
+  const [logoUrl, setLogoUrl] = useState(creator?.logo_url || "");
+  const [welcomePhotoUrl, setWelcomePhotoUrl] = useState(creator?.welcome_photo_url || "");
+  const [bio, setBio] = useState(creator?.bio || "");
+  const [howDropsWork, setHowDropsWork] = useState(creator?.how_drops_work || "");
+  const [instagram, setInstagram] = useState(creator?.social_links?.instagram || "");
+  const [facebook, setFacebook] = useState(creator?.social_links?.facebook || "");
+  const [tiktok, setTiktok] = useState(creator?.social_links?.tiktok || "");
+  const [savingWelcome, setSavingWelcome] = useState(false);
+
+  const handleSaveWelcome = async () => {
+    setSavingWelcome(true);
+    await onSaveWelcomeEmail({
+      logoUrl, welcomePhotoUrl, bio, howDropsWork,
+      socialLinks: { instagram, facebook, tiktok },
+    });
+    setSavingWelcome(false);
+  };
+
+  const welcomeComplete = !!(bio);
 
   const handleChangeEmail = async () => {
     if (!newEmail) return;
@@ -1624,19 +1660,92 @@ function SettingsTab({ creator, onEditProfile, session, showToast }) {
       <div className="form-group"><label className="form-label">Tagline</label><div style={{fontSize:14,color:"var(--text-secondary)"}}>{creator?.tagline||"Not set"}</div></div>
       <div className="form-group"><label className="form-label">Your Page URL</label><div style={{fontSize:14,fontWeight:500,color:"var(--accent)",wordBreak:"break-all"}}>{customerUrl}</div><div className="form-hint">Share this link with your customers</div></div>
       <div className="form-group"><label className="form-label">URL Slug</label><div style={{fontSize:14,fontWeight:500}}>{creator?.slug||"Not set"}</div></div>
-
-      {/* Theme preview */}
       <div style={{marginTop:8}}>
         <label className="form-label">{I.palette} Storefront Theme</label>
         <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)"}}>
           <div style={{width:28,height:28,borderRadius:"50%",background:themeAccent,flexShrink:0}}/>
-          <div>
-            <div style={{fontWeight:600,fontSize:14}}>{themeName}</div>
-            <div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:2}}>Click Edit to change theme or upload a hero image</div>
-          </div>
+          <div><div style={{fontWeight:600,fontSize:14}}>{themeName}</div><div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:2}}>Click Edit to change theme or upload a hero image</div></div>
           {creator?.hero_image_url && <img src={creator.hero_image_url} alt="" style={{width:48,height:32,objectFit:"cover",borderRadius:6,marginLeft:"auto",flexShrink:0}}/>}
         </div>
       </div>
+    </div>
+
+    {/* Welcome Email */}
+    <div className="card" id="welcome-email-section" style={{maxWidth:600,marginBottom:24,borderLeft: welcomeComplete ? "4px solid var(--green)" : "4px solid var(--gold)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+        <div>
+          <h2 style={{marginBottom:4}}>Welcome Email</h2>
+          <p style={{fontSize:13,color:"var(--text-secondary)"}}>
+            New customers receive this email within 1 hour of their first order or signup — automatically, in your voice.
+          </p>
+        </div>
+        {welcomeComplete
+          ? <span className="badge badge-active" style={{flexShrink:0,marginLeft:12}}>✓ Set up</span>
+          : <span className="badge badge-confirmed" style={{flexShrink:0,marginLeft:12}}>Incomplete</span>
+        }
+      </div>
+
+      {/* Guidance callout */}
+      <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"14px 16px",marginBottom:20,fontSize:13,color:"var(--text-secondary)",lineHeight:1.6}}>
+        <strong style={{color:"var(--text)",display:"block",marginBottom:4}}>What to include</strong>
+        Think of this as your first impression — a personal note from you to someone who just discovered your food. Tell them who you are, what drives you to cook, and what they can expect from ordering with you. The more genuine and personal it feels, the more likely they are to order again.
+      </div>
+
+      {/* Logo */}
+      <ImageUpload value={logoUrl} onChange={setLogoUrl} label="Your Logo (optional)"/>
+
+      {/* Welcome photo */}
+      <ImageUpload value={welcomePhotoUrl} onChange={setWelcomePhotoUrl} label="Photo of You or Your Food (optional)"/>
+
+      {/* Bio */}
+      <div className="form-group">
+        <label className="form-label">Your Introduction {!bio && <span style={{color:"var(--gold)",fontSize:11,fontWeight:400,marginLeft:4}}>Required</span>}</label>
+        <textarea
+          className="form-textarea"
+          rows={6}
+          placeholder={"Introduce yourself — who you are, where you cook, and what drives you to make food. Share the story behind your business. Your customers want to connect with the person behind the food, not just the menu.\n\nAim for 1–3 paragraphs in your own voice. Don't overthink it — write like you'd talk to a friend."}
+          value={bio}
+          onChange={e=>setBio(e.target.value)}
+          style={{minHeight:140}}
+        />
+      </div>
+
+      {/* How drops work */}
+      <div className="form-group">
+        <label className="form-label">How Your Drops Work</label>
+        <textarea
+          className="form-textarea"
+          rows={4}
+          placeholder={"Explain your rhythm in your own words — how often you drop, how long orders stay open, and where/when pickup happens.\n\nExample: \"I post a new drop every other Friday. Orders are open for 48 hours or until things sell out. Pickup is Sunday 12–3pm in Somerville.\""}
+          value={howDropsWork}
+          onChange={e=>setHowDropsWork(e.target.value)}
+          style={{minHeight:100}}
+        />
+      </div>
+
+      {/* Social links */}
+      <div style={{marginBottom:20}}>
+        <label className="form-label">Social Links (optional)</label>
+        <div style={{display:"grid",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"var(--text-secondary)",width:80,flexShrink:0}}>Instagram</span>
+            <input className="form-input" placeholder="@yourbusiness" value={instagram} onChange={e=>setInstagram(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"var(--text-secondary)",width:80,flexShrink:0}}>Facebook</span>
+            <input className="form-input" placeholder="facebook.com/yourpage" value={facebook} onChange={e=>setFacebook(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"var(--text-secondary)",width:80,flexShrink:0}}>TikTok</span>
+            <input className="form-input" placeholder="@yourbusiness" value={tiktok} onChange={e=>setTiktok(e.target.value)}/>
+          </div>
+        </div>
+      </div>
+
+      <button className="btn btn-primary" disabled={!bio||savingWelcome} onClick={handleSaveWelcome}>
+        {savingWelcome ? "Saving..." : welcomeComplete ? "Update Welcome Email" : "Save Welcome Email"}
+      </button>
+      {!bio && <div className="form-hint" style={{marginTop:8}}>Add your introduction above to save — it's the only required field.</div>}
     </div>
 
     {/* Account Settings */}
