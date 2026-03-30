@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v20 — Fix duplicate customer bug (null customer_id on orders),
+// FOODDROP MVP v21 — manual updates from Claude,
 //                    fix cancelled orders in revenue calculations,
 //                    customer merge tool, signup_source tracking
 // ============================================================
@@ -282,18 +282,42 @@ function darkenHex(hex, amt=20) {
 // Routes: #/slug = customer page, #/slug/admin = creator admin, #/ = landing
 function useRoute() {
   const [hash, setHash] = useState(window.location.hash || "#/");
-  useEffect(() => { const h = () => setHash(window.location.hash || "#/"); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
+  useEffect(() => {
+    const h = () => setHash(window.location.hash || "#/");
+    window.addEventListener("hashchange", h);
+    // Intercept browser back/forward: if a session exists and the back destination
+    // is the storefront for the creator currently in admin, redirect to admin instead.
+    const onPop = () => {
+      const newHash = window.location.hash || "#/";
+      const { isAdmin } = parseRoute(newHash);
+      try {
+        const s = localStorage.getItem("fd_session");
+        if (s && !isAdmin) {
+          const session = JSON.parse(s);
+          if (session?.user) {
+            // We have a session — stay on the admin URL
+            window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+            // Don't change hash — keep them where they were
+          }
+        }
+      } catch {}
+      setHash(window.location.hash || "#/");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => { window.removeEventListener("hashchange", h); window.removeEventListener("popstate", onPop); };
+  }, []);
   return hash;
 }
 
 function parseRoute(hash) {
   const path = hash.replace("#/", "").replace(/\/$/, "");
-  if (!path) return { slug: null, isAdmin: false };
+  if (!path) return { slug: null, isAdmin: false, isLoginPage: false };
+  if (path === "login") return { slug: null, isAdmin: false, isLoginPage: true };
   const parts = path.split("/");
   if (parts.length >= 2 && parts[parts.length - 1] === "admin") {
-    return { slug: parts.slice(0, -1).join("/"), isAdmin: true };
+    return { slug: parts.slice(0, -1).join("/"), isAdmin: true, isLoginPage: false };
   }
-  return { slug: parts.join("/"), isAdmin: false };
+  return { slug: parts.join("/"), isAdmin: false, isLoginPage: false };
 }
 
 // ============================================================
@@ -339,16 +363,25 @@ export default function FoodDropApp() {
     checkSession();
   }, []);
 
-  const handleLogin = async (email, password) => {
+const handleLogin = async (email, password) => {
     const { session: s, error } = await supabase.auth.signIn(email, password);
     if (error) return { error };
     setSession(s);
+    // After login from /#/login, find this creator's slug and redirect to their admin
+    if (s?.user) {
+      const cRes = await supabase.from("creators").select("*").execute();
+      const matched = (cRes.data || []).find(c => c.auth_user_id === s.user.id);
+      if (matched?.slug) {
+        window.location.hash = `#/${matched.slug}/admin`;
+      }
+    }
     return { error: null };
   };
 
   const handleLogout = async () => {
     if (session?.access_token) await supabase.auth.signOut(session.access_token);
     setSession(null);
+    window.location.hash = "#/login";
   };
 
   const loadData = useCallback(async () => {
@@ -394,6 +427,25 @@ export default function FoodDropApp() {
   const getOrderItems = useCallback((id) => orderItems.filter((oi) => oi.order_id === id), [orderItems]);
 
   if (loading || !authChecked) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
+
+// Universal login page at /#/login
+  const { isLoginPage } = parseRoute(route);
+  if (isLoginPage) {
+    // If already logged in, redirect to their dashboard
+    if (session?.user) {
+      const matched = allCreators.find(c => c.auth_user_id === session.user.id);
+      if (matched?.slug) {
+        window.location.hash = `#/${matched.slug}/admin`;
+        return null;
+      }
+    }
+    return (
+      <><style>{CSS}</style><div className="app">
+        <LoginPage creator={null} onLogin={handleLogin} showToast={showToast}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
 
   // Landing page
   if (!slug && !creator) {
@@ -637,7 +689,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const handleArchiveDrop = async (id) => { await supabase.from("drops").update({ archived: true }).eq("id", id).execute(); showToast("Drop archived."); setSelectedDrop(null); loadData(); };
   const handleUnarchiveDrop = async (id) => { await supabase.from("drops").update({ archived: false }).eq("id", id).execute(); showToast("Drop restored."); loadData(); };
 
-  const handleDeleteDropPermanently = async (dropId) => {
+const handleDeleteDropPermanently = async (dropId) => {
     // Delete in order: order_items → orders → drop_items → drop
     const dropOrderIds = orders.filter(o => o.drop_id === dropId).map(o => o.id);
     for (const oid of dropOrderIds) {
@@ -645,7 +697,8 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     }
     await supabase.from("orders").delete().eq("drop_id", dropId).execute();
     await supabase.from("drop_items").delete().eq("drop_id", dropId).execute();
-    await supabase.from("drops").delete().eq("id", dropId).execute();
+    const { error } = await supabase.from("drops").delete().eq("id", dropId).execute();
+    if (error) { showToast("Delete failed — check Supabase RLS policies.", "error"); return; }
     showToast("Drop permanently deleted."); loadData();
   };
 
