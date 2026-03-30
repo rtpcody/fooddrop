@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v19.1 — Pan position persistence: saves offsetX/Y to Supabase
-//                      image_data jsonb columns, reads back on load,
-//                      applies to display layer via object-position
+// FOODDROP MVP v20 — Fix duplicate customer bug (null customer_id on orders),
+//                    fix cancelled orders in revenue calculations,
+//                    customer merge tool, signup_source tracking
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -576,6 +576,16 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const handleAddCustomer = async (d) => { if (!creator) return; await supabase.from("customers").insert({ creator_id: creator.id, name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).execute(); setShowNewCustomer(false); showToast(`${d.name} added.`); loadData(); };
   const handleEditCustomer = async (custId, d) => { await supabase.from("customers").update({ name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).eq("id", custId).execute(); setShowEditCustomer(null); setSelectedCustomer(null); showToast("Customer updated."); loadData(); };
   const handleDeleteCustomer = async (custId, custName) => { await supabase.from("customers").delete().eq("id", custId).execute(); setSelectedCustomer(null); showToast(`${custName} removed.`); loadData(); };
+
+  const handleMergeCustomers = async (keepId, mergeId) => {
+    // Move all orders from mergeId to keepId
+    await supabase.from("orders").update({ customer_id: keepId }).eq("customer_id", mergeId).execute();
+    // Delete the duplicate customer row
+    await supabase.from("customers").delete().eq("id", mergeId).execute();
+    setSelectedCustomer(null);
+    showToast("Customers merged successfully.");
+    loadData();
+  };
   const handleImportCustomers = async (rows) => {
     if (!creator) return;
     const inserts = rows.map(r => ({ creator_id: creator.id, name: r.name, email: r.email, phone: r.phone || "", prefer_contact: r.prefer_contact || "email", notes: r.notes || "", opted_in: true }));
@@ -696,7 +706,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
-        {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}/>}
+        {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
         {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} onSaveWelcomeEmail={handleSaveWelcomeEmail} session={session} showToast={showToast}/>}
       </div>
@@ -1431,7 +1441,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
     {view==="orders"&&(<div className="page-enter">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>All Orders</h2></div>
       {dO.length===0?<div className="empty-state"><p>No orders yet.</p></div>:(
-        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);return(<tr key={order.id}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td><td style={{fontWeight:600}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span></td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);const isCancelled=order.status==="cancelled";return(<tr key={order.id} style={{opacity:isCancelled?0.6:1}}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td><td style={{fontWeight:600,textDecoration:isCancelled?"line-through":"none",color:isCancelled?"var(--text-tertiary)":"var(--text)"}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span></td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
       )}
     </div>)}
 
@@ -1584,11 +1594,15 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
   </>);
 }
 
-function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit, onDelete }) {
+function CustomerDetail({ customer, orders, drops, customers, getOrderItems, onBack, onEdit, onDelete, onMerge }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showMerge, setShowMerge] = useState(false);
   const custOrders = orders.filter(o => o.customer_id === customer.id);
   const nonCancelled = custOrders.filter(o => o.status !== "cancelled");
   const totalSpent = nonCancelled.reduce((s, o) => s + Number(o.total), 0);
+
+  const sourceLabel = { order: "Ordered", signup_form: "Signed up", manual: "Added manually" };
+  const sourceBadgeClass = { order: "badge-active", signup_form: "badge-preorder", manual: "badge-confirmed" };
 
   return (<>
     <button className="btn btn-ghost" onClick={onBack} style={{marginBottom:16}}>{I.back} Back to Customers</button>
@@ -1596,10 +1610,21 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
       <div className="cust-detail-header">
         <div>
           <h1>{customer.name}</h1>
-          <div style={{display:"flex",gap:16,marginTop:8,fontSize:14,color:"var(--text-secondary)",flexWrap:"wrap"}}><span style={{display:"flex",alignItems:"center",gap:6}}>{I.mail} {customer.email}</span>{customer.phone&&<span style={{display:"flex",alignItems:"center",gap:6}}>{I.phone} {customer.phone}</span>}</div>
-          <div style={{marginTop:8}}><span className={`badge ${customer.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`}>Prefers {customer.prefer_contact==="sms"?"SMS":"Email"}</span></div>
+          <div style={{display:"flex",gap:16,marginTop:8,fontSize:14,color:"var(--text-secondary)",flexWrap:"wrap"}}>
+            <span style={{display:"flex",alignItems:"center",gap:6}}>{I.mail} {customer.email}</span>
+            {customer.phone&&<span style={{display:"flex",alignItems:"center",gap:6}}>{I.phone} {customer.phone}</span>}
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+            <span className={`badge ${customer.prefer_contact==="sms"?"badge-fcfs":"badge-preorder"}`}>Prefers {customer.prefer_contact==="sms"?"SMS":"Email"}</span>
+            {customer.signup_source && (
+              <span className={`badge ${sourceBadgeClass[customer.signup_source]||"badge-confirmed"}`} style={{fontSize:11}}>
+                {sourceLabel[customer.signup_source]||customer.signup_source}
+              </span>
+            )}
+          </div>
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button className="btn btn-secondary btn-sm" onClick={()=>setShowMerge(!showMerge)}>{I.users} Merge</button>
           <button className="btn btn-secondary btn-sm" onClick={onEdit}>{I.edit} Edit</button>
           {!confirmDelete ? (
             <button className="btn btn-danger btn-sm" onClick={()=>setConfirmDelete(true)}>Delete</button>
@@ -1612,6 +1637,16 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
           )}
         </div>
       </div>
+
+      {/* Merge tool */}
+      {showMerge && (
+        <MergeCustomerPanel
+          customer={customer}
+          allCustomers={customers}
+          onMerge={(targetId) => { onMerge(customer.id, targetId); setShowMerge(false); }}
+          onCancel={() => setShowMerge(false)}
+        />
+      )}
 
       {/* Notes */}
       {customer.notes && (
@@ -1629,9 +1664,65 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
     </div>
     <h2 style={{marginBottom:16}}>Order History</h2>
     {custOrders.length===0?(<div className="empty-state"><p>No orders yet from this customer.</p></div>):(
-      <div className="cust-order-timeline">{custOrders.map(order=>{const drop=drops.find(d=>d.id===order.drop_id);const ois=getOrderItems(order.id);return(<div key={order.id} className="cust-order-item"><div className="cust-order-dot"/><div className="card" style={{marginBottom:4}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}><div><h3>{drop?.title||"Unknown Drop"}</h3><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{drop?`${fmtDate(drop.pickup_date)}, ${drop.pickup_time}`:""}</div></div><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span></div>{ois.map(oi=>(<div key={oi.id} style={{display:"flex",justifyContent:"space-between",fontSize:14,padding:"4px 0"}}><span>{oi.quantity}× {oi.item_name}</span><span style={{color:"var(--text-secondary)"}}>{fmt(oi.item_price*oi.quantity)}</span></div>))}<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"1px solid var(--border)",fontWeight:600}}><span>Total</span><span>{fmt(order.total)}</span></div></div></div>)})}</div>
+      <div className="cust-order-timeline">{custOrders.map(order=>{const drop=drops.find(d=>d.id===order.drop_id);const ois=getOrderItems(order.id);return(<div key={order.id} className="cust-order-item"><div className="cust-order-dot"/><div className="card" style={{marginBottom:4}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}><div><h3>{drop?.title||"Unknown Drop"}</h3><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{drop?`${fmtDate(drop.pickup_date)}, ${drop.pickup_time}`:""}</div></div><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span></div>{ois.map(oi=>(<div key={oi.id} style={{display:"flex",justifyContent:"space-between",fontSize:14,padding:"4px 0"}}><span>{oi.quantity}× {oi.item_name}</span><span style={{color:"var(--text-secondary)"}}>{fmt(oi.item_price*oi.quantity)}</span></div>))}<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"1px solid var(--border)",fontWeight:600}}><span>Total</span><span style={{textDecoration:order.status==="cancelled"?"line-through":"none",color:order.status==="cancelled"?"var(--text-tertiary)":"var(--text)"}}>{fmt(order.total)}</span></div></div></div>)})}</div>
     )}
   </>);
+}
+
+// Merge customer panel — shown inline in CustomerDetail
+function MergeCustomerPanel({ customer, allCustomers, onMerge, onCancel }) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState(null);
+
+  const candidates = allCustomers.filter(c =>
+    c.id !== customer.id &&
+    (c.name.toLowerCase().includes(search.toLowerCase()) ||
+     c.email.toLowerCase().includes(search.toLowerCase()))
+  ).slice(0, 8);
+
+  return (
+    <div style={{background:"var(--gold-light)",border:"1px solid #f0dca0",borderRadius:"var(--radius-sm)",padding:16,marginBottom:16}}>
+      <div style={{fontWeight:600,fontSize:15,marginBottom:4,color:"var(--gold)"}}>Merge duplicate customer</div>
+      <p style={{fontSize:13,color:"var(--text-secondary)",marginBottom:12}}>
+        Find the duplicate entry below. All orders from that record will be moved to <strong>{customer.name}</strong>, and the duplicate will be deleted.
+      </p>
+      <input
+        className="form-input"
+        placeholder="Search by name or email..."
+        value={search}
+        onChange={e=>setSearch(e.target.value)}
+        style={{marginBottom:8}}
+        autoFocus
+      />
+      {search && candidates.length === 0 && (
+        <div style={{fontSize:13,color:"var(--text-tertiary)",padding:"8px 0"}}>No matches found.</div>
+      )}
+      {candidates.map(c => (
+        <div
+          key={c.id}
+          onClick={()=>setSelected(selected?.id===c.id?null:c)}
+          style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:"var(--radius-sm)",background:selected?.id===c.id?"var(--accent-light)":"var(--surface)",border:`1px solid ${selected?.id===c.id?"var(--accent)":"var(--border)"}`,marginBottom:6,cursor:"pointer"}}
+        >
+          <div style={{flex:1}}>
+            <div style={{fontWeight:600,fontSize:14}}>{c.name}</div>
+            <div style={{fontSize:12,color:"var(--text-secondary)"}}>{c.email}{c.phone?` · ${c.phone}`:""}</div>
+          </div>
+          {selected?.id===c.id && <span style={{fontSize:12,color:"var(--accent)",fontWeight:600}}>Selected</span>}
+        </div>
+      ))}
+      {selected && (
+        <div style={{marginTop:12,padding:12,background:"var(--surface)",borderRadius:"var(--radius-sm)",border:"1px solid var(--border)",fontSize:13,color:"var(--text-secondary)"}}>
+          <strong style={{color:"var(--text)"}}>Confirm:</strong> Move all orders from <strong>{selected.name}</strong> ({selected.email}) into <strong>{customer.name}</strong>'s record and delete the duplicate.
+        </div>
+      )}
+      <div style={{display:"flex",gap:8,marginTop:12}}>
+        <button className="btn btn-danger btn-sm" disabled={!selected} onClick={()=>onMerge(selected.id)}>
+          {I.users} Merge into {customer.name}
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
 }
 
 // ============================================================
@@ -2389,15 +2480,24 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
     setPlacing(true);
     const cartItems = Object.entries(cart).filter(([,q])=>q>0).map(([id,qty])=>({dropItemId:id,qty}));
     let customerId = null;
-    const existing = customers.find(c=>c.email.toLowerCase()===email.toLowerCase());
-    if(existing){customerId=existing.id}else if(creator){const{data:nc}=await supabase.from("customers").insert({creator_id:creator.id,name,email,phone,prefer_contact:preferContact}).select("*").single().execute();if(nc)customerId=nc.id}
-    const{data:no,error}=await supabase.from("orders").insert({drop_id:drop.id,customer_id:customerId,total:cartTotal,status:"confirmed",customer_name:name,customer_email:email}).select("*").single().execute();
-    if(error||!no){showToast("Failed to place order","error");setPlacing(false);return}
-    await supabase.from("order_items").insert(cartItems.map(ci=>{const di=items.find(d=>d.id===ci.dropItemId);return{order_id:no.id,drop_item_id:ci.dropItemId,item_name:di?.name||"Unknown",item_price:di?.price||0,quantity:ci.qty}})).execute();
-    for(const ci of cartItems){const di=items.find(d=>d.id===ci.dropItemId);if(di)await supabase.from("drop_items").update({claimed:di.claimed+ci.qty}).eq("id",di.id).execute()}
-    const orderDetail={...no,items:cartItems.map(ci=>{const di=items.find(d=>d.id===ci.dropItemId);return{name:di?.name,price:di?.price,qty:ci.qty}}),drop,customerName:name,customerEmail:email};
+    const existing = customers.find(c=>c.email.toLowerCase().trim()===email.toLowerCase().trim());
+    if (existing) {
+      customerId = existing.id;
+      // If existing customer has no phone/prefer_contact, update them
+      if (!existing.phone && phone) {
+        await supabase.from("customers").update({ phone, prefer_contact: preferContact }).eq("id", existing.id).execute();
+      }
+    } else if (creator) {
+      const { data: nc } = await supabase.from("customers").insert({ creator_id: creator.id, name, email: email.toLowerCase().trim(), phone, prefer_contact: preferContact, signup_source: "order" }).select("*").single().execute();
+      if (nc) customerId = nc.id;
+    }
+    const { data: no, error } = await supabase.from("orders").insert({ drop_id: drop.id, customer_id: customerId, total: cartTotal, status: "confirmed", customer_name: name, customer_email: email.toLowerCase().trim() }).select("*").single().execute();
+    if (error || !no) { showToast("Failed to place order", "error"); setPlacing(false); return; }
+    await supabase.from("order_items").insert(cartItems.map(ci => { const di = items.find(d => d.id === ci.dropItemId); return { order_id: no.id, drop_item_id: ci.dropItemId, item_name: di?.name || "Unknown", item_price: di?.price || 0, quantity: ci.qty }; })).execute();
+    for (const ci of cartItems) { const di = items.find(d => d.id === ci.dropItemId); if (di) await supabase.from("drop_items").update({ claimed: di.claimed + ci.qty }).eq("id", di.id).execute(); }
+    const orderDetail = { ...no, items: cartItems.map(ci => { const di = items.find(d => d.id === ci.dropItemId); return { name: di?.name, price: di?.price, qty: ci.qty }; }), drop, customerName: name, customerEmail: email };
 
-    // Send confirmation email (non-blocking — don't fail the order if email fails)
+    // Send confirmation email (non-blocking)
     try {
       await fetch("/api/send-email", {
         method: "POST",
@@ -2416,15 +2516,13 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
       });
     } catch (emailErr) { console.error("Email send failed:", emailErr); }
 
-    // Send welcome email — only if this is their first order (new customer)
-    // existing is defined above: null if they were just created, truthy if pre-existing
+    // Send welcome email — only for brand new customers
     if (!existing && customerId) {
-      // Mark welcome_sent so it never fires twice
       await supabase.from("customers").update({ welcome_sent: true }).eq("id", customerId).execute();
       sendWelcomeEmail({ creator, customerName: name, customerEmail: email });
     }
 
-    setPlacing(false);onOrderPlaced(orderDetail);
+    setPlacing(false); onOrderPlaced(orderDetail);
   };
 
   return (<>
@@ -2494,18 +2592,21 @@ function CustomerSignupForm({ creator, customers, showToast, loadData, onDone })
   const handleSubmit = async () => {
     if (!name || !email || !optedIn) return;
     setSaving(true);
+    const normalizedEmail = email.toLowerCase().trim();
     try {
-      const existing = customers.find(c => c.email.toLowerCase() === email.toLowerCase());
+      const existing = customers.find(c => c.email.toLowerCase().trim() === normalizedEmail);
       if (existing) {
-        // Existing customer updating their prefs — no welcome email
-        const { error } = await supabase.from("customers").update({ name, phone, prefer_contact: preferContact, opted_in: true }).eq("id", existing.id).execute();
-        if (error) { console.error("Signup update error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
+        // Update existing record — keep their orders intact
+        await supabase.from("customers").update({ name, phone, prefer_contact: preferContact, opted_in: true }).eq("id", existing.id).execute();
       } else if (creator) {
-        // Brand new customer — insert, then send welcome email
-        const { data: nc, error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "", welcome_sent: true }).select("*").single().execute();
+        // New customer — insert with signup_source
+        const { data: nc, error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email: normalizedEmail, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "", welcome_sent: true, signup_source: "signup_form" }).select("*").single().execute();
         if (error) { console.error("Signup insert error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
-        // Fire welcome email non-blocking
-        if (nc) sendWelcomeEmail({ creator, customerName: name, customerEmail: email });
+        if (nc) {
+          // Re-link any orphaned orders (customer_id = null) that match this email
+          await supabase.from("orders").update({ customer_id: nc.id }).eq("customer_email", normalizedEmail).execute();
+          sendWelcomeEmail({ creator, customerName: name, customerEmail: normalizedEmail });
+        }
       }
       setSaving(false); setDone(true); loadData();
     } catch (e) { console.error("Signup exception:", e); showToast("Something went wrong.", "error"); setSaving(false); }
