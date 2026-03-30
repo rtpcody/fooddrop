@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v19 — Pan-to-crop image picker replacing ImageUpload,
-//                    frame previews with recommended size hints,
-//                    per-context aspect ratios on all image fields
+// FOODDROP MVP v19.1 — Pan position persistence: saves offsetX/Y to Supabase
+//                      image_data jsonb columns, reads back on load,
+//                      applies to display layer via object-position
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -554,19 +554,20 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
 
   const handleCreateDrop = async (d, items) => {
     if (!creator) return;
-    const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "" }).select("*").single().execute();
+    const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null }).select("*").single().execute();
     if (error || !nd) { showToast("Failed to create drop", "error"); return; }
-    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "" }))).execute();
+    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null }))).execute();
     setShowNewDrop(false); setDuplicateDrop(null); showToast("Drop created!"); loadData();
   };
 
   const handleEditDrop = async (dropId, d, items) => {
-    await supabase.from("drops").update({ title: d.title, description: d.description, pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "" }).eq("id", dropId).execute();
+    await supabase.from("drops").update({ title: d.title, description: d.description, pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null }).eq("id", dropId).execute();
     for (const item of items) {
+      const imgData = item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null;
       if (item.existingId) {
-        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "" }).eq("id", item.existingId).execute();
+        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "", image_data: imgData }).eq("id", item.existingId).execute();
       } else {
-        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "" }).execute();
+        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "", image_data: imgData }).execute();
       }
     }
     setShowEditDrop(null); showToast("Drop updated!"); loadData();
@@ -598,16 +599,26 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     }
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
-  const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline, slug: d.slug, theme: d.theme, hero_image_url: d.heroImageUrl || "" }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated! Slug changes take effect on reload."); loadData(); };
+  const handleEditProfile = async (d) => {
+    if (!creator) return;
+    await supabase.from("creators").update({
+      name: d.name, tagline: d.tagline, slug: d.slug, theme: d.theme,
+      hero_image_url: d.heroImageUrl || "",
+      hero_image_data: d.heroImageUrl ? { url: d.heroImageUrl, x: d.heroPan?.x ?? 50, y: d.heroPan?.y ?? 50 } : null,
+    }).eq("id", creator.id).execute();
+    setShowEditProfile(false); showToast("Profile updated! Slug changes take effect on reload."); loadData();
+  };
 
   const handleSaveWelcomeEmail = async (d) => {
     if (!creator) return;
     await supabase.from("creators").update({
       logo_url: d.logoUrl || "",
+      logo_data: d.logoUrl ? { url: d.logoUrl, x: d.logoPan?.x ?? 50, y: d.logoPan?.y ?? 50 } : null,
       bio: d.bio || "",
       how_drops_work: d.howDropsWork || "",
       social_links: d.socialLinks || {},
       welcome_photo_url: d.welcomePhotoUrl || "",
+      welcome_photo_data: d.welcomePhotoUrl ? { url: d.welcomePhotoUrl, x: d.welcomePhotoPan?.x ?? 50, y: d.welcomePhotoPan?.y ?? 50 } : null,
     }).eq("id", creator.id).execute();
     showToast("Welcome email saved!"); loadData();
   };
@@ -1634,8 +1645,10 @@ function SettingsTab({ creator, onEditProfile, onSaveWelcomeEmail, session, show
   const [saving, setSaving] = useState(false);
 
   // Welcome email state
-  const [logoUrl, setLogoUrl] = useState(creator?.logo_url || "");
-  const [welcomePhotoUrl, setWelcomePhotoUrl] = useState(creator?.welcome_photo_url || "");
+  const [logoUrl, setLogoUrl] = useState(creator?.logo_data?.url || creator?.logo_url || "");
+  const [logoPan, setLogoPan] = useState({ x: creator?.logo_data?.x ?? 50, y: creator?.logo_data?.y ?? 50 });
+  const [welcomePhotoUrl, setWelcomePhotoUrl] = useState(creator?.welcome_photo_data?.url || creator?.welcome_photo_url || "");
+  const [welcomePhotoPan, setWelcomePhotoPan] = useState({ x: creator?.welcome_photo_data?.x ?? 50, y: creator?.welcome_photo_data?.y ?? 50 });
   const [bio, setBio] = useState(creator?.bio || "");
   const [howDropsWork, setHowDropsWork] = useState(creator?.how_drops_work || "");
   const [instagram, setInstagram] = useState(creator?.social_links?.instagram || "");
@@ -1646,7 +1659,7 @@ function SettingsTab({ creator, onEditProfile, onSaveWelcomeEmail, session, show
   const handleSaveWelcome = async () => {
     setSavingWelcome(true);
     await onSaveWelcomeEmail({
-      logoUrl, welcomePhotoUrl, bio, howDropsWork,
+      logoUrl, logoPan, welcomePhotoUrl, welcomePhotoPan, bio, howDropsWork,
       socialLinks: { instagram, facebook, tiktok },
     });
     setSavingWelcome(false);
@@ -1721,10 +1734,10 @@ function SettingsTab({ creator, onEditProfile, onSaveWelcomeEmail, session, show
       </div>
 
       {/* Logo */}
-      <ImageUpload value={logoUrl} onChange={setLogoUrl} label="Your Logo (optional)" frameRatio="circle"/>
+      <ImageUpload value={logoUrl} onChange={setLogoUrl} panValue={logoPan} onPanChange={setLogoPan} label="Your Logo (optional)" frameRatio="circle"/>
 
       {/* Welcome photo */}
-      <ImageUpload value={welcomePhotoUrl} onChange={setWelcomePhotoUrl} label="Photo of You or Your Food (optional)" frameRatio="4:3"/>
+      <ImageUpload value={welcomePhotoUrl} onChange={setWelcomePhotoUrl} panValue={welcomePhotoPan} onPanChange={setWelcomePhotoPan} label="Photo of You or Your Food (optional)" frameRatio="4:3"/>
 
       {/* Bio */}
       <div className="form-group">
@@ -2031,7 +2044,8 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
   const [pickupDate, setPickupDate] = useState(duplicateFrom ? "" : (src?.pickup_date || ""));
   const [pickupTime, setPickupTime] = useState(src?.pickup_time || "");
   const [pickupLocation, setPickupLocation] = useState(src?.pickup_location || "");
-  const [imageUrl, setImageUrl] = useState(src?.image_url || "");
+  const [imageUrl, setImageUrl] = useState(src?.image_data?.url || src?.image_url || "");
+  const [imagePan, setImagePan] = useState({ x: src?.image_data?.x ?? 50, y: src?.image_data?.y ?? 50 });
   const [items, setItems] = useState(() => {
     if (srcItems?.length) return srcItems.map(i => ({
       id: duplicateFrom ? `dup${i.id}` : i.id,
@@ -2039,23 +2053,24 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
       name: i.name, description: i.description||"", price: String(i.price),
       quantity: i.quantity===-1?"":String(i.quantity),
       unlimited: i.quantity===-1, sortOrder: i.sort_order,
-      imageUrl: i.image_url||""
+      imageUrl: i.image_data?.url || i.image_url||"",
+      imagePan: { x: i.image_data?.x ?? 50, y: i.image_data?.y ?? 50 },
     }));
-    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "" }];
+    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "", imagePan: { x: 50, y: 50 } }];
   });
   const [saving, setSaving] = useState(false);
-  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "" }]);
+  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 } }]);
   const removeItem = (id) => items.length > 1 && setItems(items.filter(i => i.id !== id));
   const updateItem = (id, f, v) => setItems(items.map(i => (i.id === id ? { ...i, [f]: v } : i)));
   const canSave = title && pickupDate && pickupTime && pickupLocation && items.every(i => i.name && i.price) && !saving;
-  const handleSave = async () => { setSaving(true); await onSave({ title, description: desc, pickupDate, pickupTime, pickupLocation, imageUrl }, items); setSaving(false); };
+  const handleSave = async () => { setSaving(true); await onSave({ title, description: desc, pickupDate, pickupTime, pickupLocation, imageUrl, imagePan }, items); setSaving(false); };
 
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="modal-header"><h2>{mode==="edit"?"Edit Drop":duplicateFrom?"Duplicate Drop":"Create New Drop"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Drop Title</label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
-      <ImageUpload value={imageUrl} onChange={setImageUrl} label="Drop Cover Image (optional)" frameRatio="2:1"/>
+      <ImageUpload value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Drop Cover Image (optional)" frameRatio="2:1"/>
       <div className="form-row"><div className="form-group"><label className="form-label">Pickup Date</label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div><div className="form-group"><label className="form-label">Pickup Time</label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div></div>
       <div className="form-group"><label className="form-label">Pickup Location</label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
       <div style={{marginBottom:20}}>
@@ -2066,7 +2081,7 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
           <textarea className="form-textarea" placeholder="Description (optional) — ingredients, allergens, serving size..." value={item.description} onChange={e=>updateItem(item.id,"description",e.target.value)} style={{marginBottom:8,minHeight:56,fontSize:13}}/>
           <div className="form-row"><input className="form-input" type="number" placeholder="Price" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>
           <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
-          <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} label="Item Image (optional)" frameRatio="1:1"/>
+          <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} panValue={item.imagePan} onPanChange={pan=>updateItem(item.id,"imagePan",pan)} label="Item Image (optional)" frameRatio="1:1"/>
         </div>))}
       </div>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Drop")}</button>
@@ -2144,7 +2159,8 @@ function ProfileFormModal({ creator, onSave, onClose }) {
   const [name, setName] = useState(creator?.name||"");
   const [tagline, setTagline] = useState(creator?.tagline||"");
   const [slug, setSlug] = useState(creator?.slug||"");
-  const [heroImageUrl, setHeroImageUrl] = useState(creator?.hero_image_url||"");
+  const [heroImageUrl, setHeroImageUrl] = useState(creator?.hero_image_data?.url || creator?.hero_image_url||"");
+  const [heroPan, setHeroPan] = useState({ x: creator?.hero_image_data?.x ?? 50, y: creator?.hero_image_data?.y ?? 50 });
   const [themeKey, setThemeKey] = useState(creator?.theme?.key || "terracotta");
   const [customAccent, setCustomAccent] = useState(creator?.theme?.accent || "#C4572A");
   const [saving, setSaving] = useState(false);
@@ -2162,7 +2178,7 @@ function ProfileFormModal({ creator, onSave, onClose }) {
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave({ name, tagline, slug: cleanSlug(slug), theme: getThemeData(), heroImageUrl });
+    await onSave({ name, tagline, slug: cleanSlug(slug), theme: getThemeData(), heroImageUrl, heroPan });
     setSaving(false);
   };
 
@@ -2178,7 +2194,7 @@ function ProfileFormModal({ creator, onSave, onClose }) {
       <div className="form-group"><label className="form-label">Page URL Slug</label><input className="form-input" placeholder="my-kitchen" value={slug} onChange={e=>setSlug(e.target.value)}/><div className="form-hint">Letters, numbers, and dashes only.</div></div>
 
       {/* Hero Image */}
-      <ImageUpload value={heroImageUrl} onChange={setHeroImageUrl} label="Storefront Hero Image (optional)" frameRatio="3:1"/>
+      <ImageUpload value={heroImageUrl} onChange={setHeroImageUrl} panValue={heroPan} onPanChange={setHeroPan} label="Storefront Hero Image (optional)" frameRatio="3:1"/>
 
       {/* Theme Picker */}
       <div className="form-group">
@@ -2326,7 +2342,7 @@ function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData,
   return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter">
     {active.length===0?(<div className="empty-state" style={{marginTop:40}}><div className="empty-state-icon">{I.drop}</div><h3>No active drops right now</h3><p style={{marginTop:8}}>Check back soon!</p></div>):(<>
       <h2 style={{marginBottom:20}}>Available Drops</h2>
-      <div style={{display:"grid",gap:20}}>{active.map(drop=>{const dI=getDropItems(drop.id);const bannerStyle=drop.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)),url(${drop.image_url})`,backgroundSize:"cover",backgroundPosition:"center"}:{};return(<div key={drop.id} className="cust-drop-card" onClick={()=>setSelectedDrop(drop)}><div className="cust-drop-banner" style={bannerStyle}><h2>{drop.title}</h2>{drop.description&&<p style={{fontSize:14,marginTop:6,opacity:.9}}>{drop.description}</p>}</div><div className="cust-drop-body"><div className="cust-drop-detail">{I.clock} <span>{fmtDateLong(drop.pickup_date)}, {drop.pickup_time}</span></div><div className="cust-drop-detail">{I.pin} <span>{drop.pickup_location}</span></div><div className="cust-drop-detail">{I.dollar} <span>Cash at pickup</span></div><div className="cust-drop-items-peek"><span>{dI.length} item{dI.length!==1?"s":""}: {dI.map(i=>i.name).join(", ")}</span></div><div style={{marginTop:16}}><span className="btn btn-primary btn-full">View Menu & Order →</span></div></div></div>)})}</div>
+      <div style={{display:"grid",gap:20}}>{active.map(drop=>{const dI=getDropItems(drop.id);const dropPos=drop.image_data?`${drop.image_data.x}% ${drop.image_data.y}%`:"50% 50%";const bannerStyle=drop.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)),url(${drop.image_url})`,backgroundSize:"cover",backgroundPosition:dropPos}:{};return(<div key={drop.id} className="cust-drop-card" onClick={()=>setSelectedDrop(drop)}><div className="cust-drop-banner" style={bannerStyle}><h2>{drop.title}</h2>{drop.description&&<p style={{fontSize:14,marginTop:6,opacity:.9}}>{drop.description}</p>}</div><div className="cust-drop-body"><div className="cust-drop-detail">{I.clock} <span>{fmtDateLong(drop.pickup_date)}, {drop.pickup_time}</span></div><div className="cust-drop-detail">{I.pin} <span>{drop.pickup_location}</span></div><div className="cust-drop-detail">{I.dollar} <span>Cash at pickup</span></div><div className="cust-drop-items-peek"><span>{dI.length} item{dI.length!==1?"s":""}: {dI.map(i=>i.name).join(", ")}</span></div><div style={{marginTop:16}}><span className="btn btn-primary btn-full">View Menu & Order →</span></div></div></div>)})}</div>
     </>)}
     <div className="signup-section">
       {!showSignup ? (
@@ -2344,9 +2360,11 @@ function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData,
 
 function CustomerHeader({ creator }) {
   const hasHero = !!creator?.hero_image_url;
+  const heroPan = creator?.hero_image_data;
+  const heroPos = heroPan ? `${heroPan.x}% ${heroPan.y}%` : "50% 50%";
   return (
     <div className={`cust-header ${hasHero ? "has-hero" : ""}`}>
-      {hasHero && <img src={creator.hero_image_url} alt="" className="cust-header-hero"/>}
+      {hasHero && <img src={creator.hero_image_url} alt="" className="cust-header-hero" style={{objectPosition: heroPos}}/>}
       {hasHero && <div className="cust-header-overlay"/>}
       <div className="cust-header-content">
         <div className="cust-header-name">{creator?.name||"FoodDrop"}</div>
@@ -2419,7 +2437,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
 
     {step==="menu"&&(<>
       <h3 style={{marginBottom:4}}>Menu</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16}}>Select what you'd like to order</p>
-      <div className="card">{items.map(item=>{const avail=item.quantity>0?item.quantity-item.claimed:-1;const sold=item.quantity>0&&avail<=0;return(<div key={item.id} className="oi-row" style={{opacity:sold?.5:1}}><div className="oi-info" style={{display:"flex",gap:12,alignItems:"center"}}>{item.image_url&&<img src={item.image_url} alt="" onClick={e=>{e.stopPropagation();setLightboxImg(item.image_url)}} style={{width:56,height:56,borderRadius:8,objectFit:"cover",flexShrink:0,cursor:"pointer",transition:"transform .15s"}} onMouseOver={e=>e.target.style.transform="scale(1.05)"} onMouseOut={e=>e.target.style.transform="scale(1)"}/>}<div><div className="oi-name">{item.name}</div><div className="oi-price">{fmt(item.price)}</div>{item.description&&<div className="oi-desc">{item.description}</div>}<div className="oi-avail">{sold?"Sold out":item.quantity>0?`${avail} left`:"Available"}</div></div></div>{!sold&&<div className="qty-ctrl"><button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!cart[item.id]}>−</button><span className="qty-val">{cart[item.id]||0}</span><button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button></div>}</div>)})}</div>
+      <div className="card">{items.map(item=>{const avail=item.quantity>0?item.quantity-item.claimed:-1;const sold=item.quantity>0&&avail<=0;const itemPos=item.image_data?`${item.image_data.x}% ${item.image_data.y}%`:"50% 50%";return(<div key={item.id} className="oi-row" style={{opacity:sold?.5:1}}><div className="oi-info" style={{display:"flex",gap:12,alignItems:"center"}}>{item.image_url&&<img src={item.image_url} alt="" onClick={e=>{e.stopPropagation();setLightboxImg(item.image_url)}} style={{width:56,height:56,borderRadius:8,objectFit:"cover",objectPosition:itemPos,flexShrink:0,cursor:"pointer",transition:"transform .15s"}} onMouseOver={e=>e.target.style.transform="scale(1.05)"} onMouseOut={e=>e.target.style.transform="scale(1)"}/>}<div><div className="oi-name">{item.name}</div><div className="oi-price">{fmt(item.price)}</div>{item.description&&<div className="oi-desc">{item.description}</div>}<div className="oi-avail">{sold?"Sold out":item.quantity>0?`${avail} left`:"Available"}</div></div></div>{!sold&&<div className="qty-ctrl"><button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!cart[item.id]}>−</button><span className="qty-val">{cart[item.id]||0}</span><button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button></div>}</div>)})}</div>
       {cartCount>0&&<div style={{position:"sticky",bottom:16,marginTop:24}}><button className="btn btn-primary btn-full" onClick={()=>setStep("checkout")} style={{padding:"14px 24px",fontSize:16,boxShadow:"var(--shadow-lg)"}}>Continue — {cartCount} item{cartCount!==1?"s":""}, {fmt(cartTotal)}</button></div>}
       <Lightbox src={lightboxImg} onClose={()=>setLightboxImg(null)}/>
     </>)}
