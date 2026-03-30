@@ -24,3 +24,5 @@ Push this repo to GitHub, then connect it to [Vercel](https://vercel.com) for au
 
 ## Database Setup
 Run the `supabase-schema.sql` file in your Supabase project's SQL Editor to create the required tables.
+
+<!-- dev branch test -->

@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v12 — Automated order confirmation emails via Resend
+// FOODDROP MVP v19.1 — Pan position persistence: saves offsetX/Y to Supabase
+//                      image_data jsonb columns, reads back on load,
+//                      applies to display layer via object-position
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -125,11 +127,48 @@ const I = {
   columns: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>,
   image: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
   chart: <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  trash: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>,
+  palette: <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>,
+};
+
+// Phone auto-formatter: converts digits to (xxx) xxx-xxxx
+const formatPhone = (raw) => {
+  const digits = raw.replace(/\D/g, "").slice(0, 10);
+  if (digits.length === 0) return "";
+  if (digits.length <= 3) return `(${digits}`;
+  if (digits.length <= 6) return `(${digits.slice(0,3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
 };
 
 const fmt = (n) => `$${Number(n).toFixed(2)}`;
 const fmtDate = (d) => { if (!d) return ""; return new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); };
 const fmtDateLong = (d) => { if (!d) return ""; return new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }); };
+
+// Sends the creator introduction email — non-blocking, fire-and-forget.
+// Checks welcome_sent flag first to ensure it only fires once per customer.
+async function sendWelcomeEmail({ creator, customerName, customerEmail }) {
+  if (!creator?.bio) return; // Creator hasn't set up their welcome email yet
+  if (!customerEmail) return;
+  try {
+    const storefrontUrl = `${window.location.origin}${window.location.pathname}#/${creator.slug || ""}`;
+    await fetch("/api/send-welcome-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: customerEmail,
+        customerName,
+        creatorName: creator.name || "FoodDrop",
+        creatorTagline: creator.tagline || "",
+        creatorBio: creator.bio || "",
+        creatorHowDropsWork: creator.how_drops_work || "",
+        creatorLogoUrl: creator.logo_url || "",
+        creatorPhotoUrl: creator.welcome_photo_url || "",
+        creatorStorefrontUrl: storefrontUrl,
+        socialLinks: creator.social_links || {},
+      }),
+    });
+  } catch (e) { console.error("Welcome email failed:", e); }
+}
 
 // ============================================================
 // STYLES
@@ -157,9 +196,9 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 .progress-bar{height:6px;background:var(--surface-alt);border-radius:3px;overflow:hidden;margin-top:6px}.progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}.progress-fill.full{background:var(--text-tertiary)}
 .prep-grid{display:grid;gap:12px}.prep-item{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:var(--surface-alt);border-radius:var(--radius-sm)}.prep-item-name{font-weight:600}.prep-item-count{font-family:var(--font-display);font-size:24px;font-weight:600;color:var(--accent)}
 .compose-area{background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-top:16px}.recipient-tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}.recipient-tag{background:var(--surface);border:1px solid var(--border);padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500}
-.cust-header{text-align:center;padding:40px 24px 28px;background:linear-gradient(180deg,var(--surface-alt) 0%,var(--bg) 100%);border-bottom:1px solid var(--border)}.cust-header-name{font-family:var(--font-display);font-size:36px;font-weight:700;margin-bottom:6px}.cust-header-tagline{color:var(--text-secondary);font-size:16px}.cust-body{max-width:640px;margin:0 auto;padding:32px 24px 64px}
+.cust-header{text-align:center;padding:40px 24px 28px;background:linear-gradient(180deg,var(--surface-alt) 0%,var(--bg) 100%);border-bottom:1px solid var(--border);position:relative;overflow:hidden}.cust-header.has-hero{background:none;padding:60px 24px 36px}.cust-header-hero{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}.cust-header-overlay{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:1}.cust-header-content{position:relative;z-index:2}.cust-header.has-hero .cust-header-name{color:#fff}.cust-header.has-hero .cust-header-tagline{color:rgba(255,255,255,.85)}.cust-header-name{font-family:var(--font-display);font-size:36px;font-weight:700;margin-bottom:6px}.cust-header-tagline{color:var(--text-secondary);font-size:16px}.cust-body{max-width:640px;margin:0 auto;padding:32px 24px 64px}
 .cust-drop-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:all .2s;cursor:pointer}.cust-drop-card:hover{box-shadow:var(--shadow);transform:translateY(-2px)}.cust-drop-banner{background:var(--accent);color:#fff;padding:20px 24px;position:relative;overflow:hidden;min-height:80px}.cust-drop-banner.has-img{background:linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55));background-size:cover;background-position:center}.cust-drop-banner h2{font-family:var(--font-display);color:#fff;font-size:22px;position:relative;z-index:1}.cust-drop-banner p{position:relative;z-index:1}.cust-drop-body{padding:20px 24px}.cust-drop-detail{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text-secondary);margin-bottom:8px}.cust-drop-items-peek{margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}.cust-drop-items-peek span{font-size:13px;color:var(--text-secondary)}
-.oi-row{display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)}.oi-row:last-child{border-bottom:none}.oi-info{flex:1}.oi-name{font-weight:600;font-size:15px}.oi-price{color:var(--text-secondary);font-size:14px;margin-top:2px}.oi-avail{font-size:12px;color:var(--text-tertiary);margin-top:2px}.qty-ctrl{display:flex;align-items:center;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}.qty-btn{width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--surface-alt);border:none;cursor:pointer;font-size:18px;color:var(--text);transition:background .1s}.qty-btn:hover{background:var(--border)}.qty-btn:disabled{color:var(--text-tertiary);cursor:default}.qty-btn:disabled:hover{background:var(--surface-alt)}.qty-val{width:40px;text-align:center;font-weight:600;font-size:15px}
+.oi-row{display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)}.oi-row:last-child{border-bottom:none}.oi-info{flex:1}.oi-name{font-weight:600;font-size:15px}.oi-price{color:var(--text-secondary);font-size:14px;margin-top:2px}.oi-desc{color:var(--text-tertiary);font-size:13px;margin-top:3px;line-height:1.4}.oi-avail{font-size:12px;color:var(--text-tertiary);margin-top:2px}.qty-ctrl{display:flex;align-items:center;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}.qty-btn{width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:var(--surface-alt);border:none;cursor:pointer;font-size:18px;color:var(--text);transition:background .1s}.qty-btn:hover{background:var(--border)}.qty-btn:disabled{color:var(--text-tertiary);cursor:default}.qty-btn:disabled:hover{background:var(--surface-alt)}.qty-val{width:40px;text-align:center;font-weight:600;font-size:15px}
 .confirm-box{text-align:center;padding:40px 24px}.confirm-icon{width:64px;height:64px;background:var(--green-light);color:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px}.confirm-icon svg{width:32px;height:32px}
 .connection-banner{padding:10px 24px;font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px;justify-content:center}.connection-banner.err{background:var(--red-light);color:var(--red)}
 .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:16px;color:var(--text-secondary)}.spin{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
@@ -197,7 +236,45 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 
 .login-page{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg)}.login-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px 32px;box-shadow:var(--shadow)}.login-brand{text-align:center;margin-bottom:28px}.login-brand-icon{font-size:40px;margin-bottom:8px}.login-brand h2{font-family:var(--font-display);font-size:24px}.login-brand p{color:var(--text-secondary);font-size:14px;margin-top:4px}.login-error{padding:10px 14px;background:var(--red-light);color:var(--red);border-radius:var(--radius-sm);font-size:13px;margin-bottom:16px}
 
+.theme-swatch{width:28px;height:28px;border-radius:50%;border:3px solid transparent;cursor:pointer;transition:transform .15s;flex-shrink:0}.theme-swatch:hover{transform:scale(1.15)}.theme-swatch.selected{border-color:var(--text)}
+.theme-preview-bar{height:6px;border-radius:3px;margin-top:8px}
+
+.pan-frame{position:relative;overflow:hidden;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:grab;user-select:none;background:var(--surface-alt)}.pan-frame.dragging{cursor:grabbing}.pan-frame img{position:absolute;pointer-events:none;user-select:none}.pan-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .2s}.pan-frame:hover .pan-hint{opacity:1}.pan-hint-inner{background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:5px 14px;border-radius:20px;font-family:var(--font-body)}.pan-size-badge{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.45);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;pointer-events:none;font-family:var(--font-body)}.pan-actions{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}.pan-size-hint{font-size:11px;color:var(--text-tertiary);margin-top:4px}
+
 `;
+
+// ============================================================
+// THEME SYSTEM
+// ============================================================
+const THEMES = {
+  terracotta: { name: "Terracotta", accent: "#C4572A", accentLight: "#FFF0EB", accentHover: "#A8461F", bg: "#FAFAF7", surface: "#FFF", surfaceAlt: "#F5F3EE", border: "#E8E4DC" },
+  forest:     { name: "Forest",     accent: "#2D6A4F", accentLight: "#EDFAF2", accentHover: "#1E4D38", bg: "#F7FAF8", surface: "#FFF", surfaceAlt: "#EEF4F0", border: "#D8E8DC" },
+  midnight:   { name: "Midnight",   accent: "#3B4F9C", accentLight: "#EEF1FF", accentHover: "#2C3C7A", bg: "#F7F8FC", surface: "#FFF", surfaceAlt: "#EEF0F8", border: "#DDE1F0" },
+  blush:      { name: "Blush",      accent: "#B5466B", accentLight: "#FFF0F4", accentHover: "#8E3454", bg: "#FDF8F9", surface: "#FFF", surfaceAlt: "#F9F0F3", border: "#EDD8DF" },
+  custom:     { name: "Custom",     accent: "#C4572A", accentLight: "#FFF0EB", accentHover: "#A8461F", bg: "#FAFAF7", surface: "#FFF", surfaceAlt: "#F5F3EE", border: "#E8E4DC" },
+};
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  root.style.setProperty("--accent", theme.accent);
+  root.style.setProperty("--accent-light", theme.accentLight);
+  root.style.setProperty("--accent-hover", theme.accentHover);
+  root.style.setProperty("--bg", theme.bg);
+  root.style.setProperty("--surface-alt", theme.surfaceAlt);
+  root.style.setProperty("--border", theme.border);
+}
+
+function hexToAccentLight(hex) {
+  // Derive a very light tint from a hex color
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},0.1)`;
+}
+function darkenHex(hex, amt=20) {
+  const r = Math.max(0,parseInt(hex.slice(1,3),16)-amt);
+  const g = Math.max(0,parseInt(hex.slice(3,5),16)-amt);
+  const b = Math.max(0,parseInt(hex.slice(5,7),16)-amt);
+  return `#${r.toString(16).padStart(2,"0")}${g.toString(16).padStart(2,"0")}${b.toString(16).padStart(2,"0")}`;
+}
 
 // ============================================================
 // ROUTING — Hash-based with creator slugs
@@ -467,27 +544,30 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [showEditCustomer, setShowEditCustomer] = useState(null);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showEditOrder, setShowEditOrder] = useState(null);
-  const [showRevenue, setShowRevenue] = useState(false);
+  const [showRevenue, setShowRevenue] = useState(false); // kept for legacy, unused
   const [duplicateDrop, setDuplicateDrop] = useState(null);
   const [showImportCSV, setShowImportCSV] = useState(false);
+  const [showBulkDelete, setShowBulkDelete] = useState(null); // array of ids
+  const [showDeleteDrop, setShowDeleteDrop] = useState(null); // drop object
   const customerUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}`;
   const adminUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}/admin`;
 
   const handleCreateDrop = async (d, items) => {
     if (!creator) return;
-    const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "" }).select("*").single().execute();
+    const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null }).select("*").single().execute();
     if (error || !nd) { showToast("Failed to create drop", "error"); return; }
-    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "" }))).execute();
+    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null }))).execute();
     setShowNewDrop(false); setDuplicateDrop(null); showToast("Drop created!"); loadData();
   };
 
   const handleEditDrop = async (dropId, d, items) => {
-    await supabase.from("drops").update({ title: d.title, description: d.description, pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "" }).eq("id", dropId).execute();
+    await supabase.from("drops").update({ title: d.title, description: d.description, pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null }).eq("id", dropId).execute();
     for (const item of items) {
+      const imgData = item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null;
       if (item.existingId) {
-        await supabase.from("drop_items").update({ name: item.name, price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "" }).eq("id", item.existingId).execute();
+        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "", image_data: imgData }).eq("id", item.existingId).execute();
       } else {
-        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "" }).execute();
+        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "", image_data: imgData }).execute();
       }
     }
     setShowEditDrop(null); showToast("Drop updated!"); loadData();
@@ -519,11 +599,69 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     }
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
-  const handleEditProfile = async (d) => { if (!creator) return; await supabase.from("creators").update({ name: d.name, tagline: d.tagline, slug: d.slug }).eq("id", creator.id).execute(); setShowEditProfile(false); showToast("Profile updated! Slug changes take effect on reload."); loadData(); };
+  const handleEditProfile = async (d) => {
+    if (!creator) return;
+    await supabase.from("creators").update({
+      name: d.name, tagline: d.tagline, slug: d.slug, theme: d.theme,
+      hero_image_url: d.heroImageUrl || "",
+      hero_image_data: d.heroImageUrl ? { url: d.heroImageUrl, x: d.heroPan?.x ?? 50, y: d.heroPan?.y ?? 50 } : null,
+    }).eq("id", creator.id).execute();
+    setShowEditProfile(false); showToast("Profile updated! Slug changes take effect on reload."); loadData();
+  };
+
+  const handleSaveWelcomeEmail = async (d) => {
+    if (!creator) return;
+    await supabase.from("creators").update({
+      logo_url: d.logoUrl || "",
+      logo_data: d.logoUrl ? { url: d.logoUrl, x: d.logoPan?.x ?? 50, y: d.logoPan?.y ?? 50 } : null,
+      bio: d.bio || "",
+      how_drops_work: d.howDropsWork || "",
+      social_links: d.socialLinks || {},
+      welcome_photo_url: d.welcomePhotoUrl || "",
+      welcome_photo_data: d.welcomePhotoUrl ? { url: d.welcomePhotoUrl, x: d.welcomePhotoPan?.x ?? 50, y: d.welcomePhotoPan?.y ?? 50 } : null,
+    }).eq("id", creator.id).execute();
+    showToast("Welcome email saved!"); loadData();
+  };
   const handleUpdateOrderStatus = async (oid, status) => { await supabase.from("orders").update({ status }).eq("id", oid).execute(); showToast(`Order marked as ${status.replace("_"," ")}.`); loadData(); };
   const handleEndDrop = async (id) => { await supabase.from("drops").update({ status: "ended" }).eq("id", id).execute(); showToast("Drop ended."); setSelectedDrop(null); loadData(); };
   const handleArchiveDrop = async (id) => { await supabase.from("drops").update({ archived: true }).eq("id", id).execute(); showToast("Drop archived."); setSelectedDrop(null); loadData(); };
   const handleUnarchiveDrop = async (id) => { await supabase.from("drops").update({ archived: false }).eq("id", id).execute(); showToast("Drop restored."); loadData(); };
+
+  const handleDeleteDropPermanently = async (dropId) => {
+    // Delete in order: order_items → orders → drop_items → drop
+    const dropOrderIds = orders.filter(o => o.drop_id === dropId).map(o => o.id);
+    for (const oid of dropOrderIds) {
+      await supabase.from("order_items").delete().eq("order_id", oid).execute();
+    }
+    await supabase.from("orders").delete().eq("drop_id", dropId).execute();
+    await supabase.from("drop_items").delete().eq("drop_id", dropId).execute();
+    await supabase.from("drops").delete().eq("id", dropId).execute();
+    showToast("Drop permanently deleted."); loadData();
+  };
+
+  const handleBulkDeleteCustomers = async (customerIds, deleteOrders) => {
+    if (deleteOrders) {
+      for (const cid of customerIds) {
+        const custOrderIds = orders.filter(o => o.customer_id === cid).map(o => o.id);
+        for (const oid of custOrderIds) {
+          await supabase.from("order_items").delete().eq("order_id", oid).execute();
+        }
+        await supabase.from("orders").delete().eq("customer_id", cid).execute();
+      }
+    } else {
+      // Keep orders but detach customer — set customer_id to null, keep customer_name
+      for (const cid of customerIds) {
+        const custName = customers.find(c => c.id === cid)?.name || "Guest";
+        const custEmail = customers.find(c => c.id === cid)?.email || "";
+        await supabase.from("orders").update({ customer_id: null, customer_name: custName, customer_email: custEmail }).eq("customer_id", cid).execute();
+      }
+    }
+    for (const cid of customerIds) {
+      await supabase.from("customers").delete().eq("id", cid).execute();
+    }
+    showToast(`${customerIds.length} customer${customerIds.length !== 1 ? "s" : ""} deleted.`);
+    loadData();
+  };
 
   const handleEditOrder = async (orderId, updatedItems, dropId) => {
     // Delete existing order items
@@ -549,17 +687,18 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     <>
       <div className="creator-topbar"><span className="creator-topbar-brand">🍽️ FoodDrop</span><div className="creator-topbar-actions"><button className="creator-topbar-link" onClick={copyUrl}>{I.share} Copy Customer Link</button><a className="creator-topbar-link" href={customerUrl} target="_blank" rel="noopener noreferrer">{I.eye} View Page</a><button className="creator-topbar-link" onClick={onLogout}>Log Out</button></div></div>
       <nav className="creator-nav">
-        {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"customers",label:"Customers",icon:I.users},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
+        {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"customers",label:"Customers",icon:I.users},{key:"reports",label:"Reports",icon:I.chart},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
           <button key={t.key} className={tab===t.key?"active":""} onClick={()=>{setTab(t.key);setSelectedDrop(null);setSelectedCustomer(null)}}>{t.icon} {t.label}</button>
         ))}
       </nav>
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
-        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setShowRevenue(true)} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")}/>}
-        {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}}/>}
+        {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
+        {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
-        {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)}/>}
+        {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)}/>}
-        {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} session={session} showToast={showToast}/>}
+        {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
+        {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} onSaveWelcomeEmail={handleSaveWelcomeEmail} session={session} showToast={showToast}/>}
       </div>
       {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null)}}/>}
       {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
@@ -568,8 +707,9 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       {showEditProfile && <ProfileFormModal creator={creator} onSave={handleEditProfile} onClose={()=>setShowEditProfile(false)}/>}
       {showCompose && <ComposeModal customers={customers} onClose={()=>setShowCompose(false)} onSend={()=>{setShowCompose(false);showToast("Copied to clipboard!")}}/>}
       {showEditOrder && <EditOrderModal order={showEditOrder.order} dropItems={getDropItems(showEditOrder.dropId)} existingOrderItems={getOrderItems(showEditOrder.order.id)} onSave={(items)=>handleEditOrder(showEditOrder.order.id,items,showEditOrder.dropId)} onClose={()=>setShowEditOrder(null)}/>}
-      {showRevenue && <RevenueModal drops={drops} orders={orders} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onClose={()=>setShowRevenue(false)} onViewDrop={d=>{setShowRevenue(false);setSelectedDrop(d);setTab("drops")}}/>}
       {showImportCSV && <ImportCSVModal onImport={handleImportCustomers} onClose={()=>setShowImportCSV(false)}/>}
+      {showBulkDelete && <BulkDeleteCustomersModal count={showBulkDelete.length} onConfirm={(deleteOrders)=>{handleBulkDeleteCustomers(showBulkDelete,deleteOrders);setShowBulkDelete(null);}} onClose={()=>setShowBulkDelete(null)}/>}
+      {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>{handleDeleteDropPermanently(showDeleteDrop.id);setShowDeleteDrop(null);}} onClose={()=>setShowDeleteDrop(null)}/>}
     </>
   );
 }
@@ -577,7 +717,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
 // ============================================================
 // DASHBOARD TAB — Clean with getting started + clickable revenue
 // ============================================================
-function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems, getDropOrders, getDropItems, getOrderItems, onViewDrop, onShowRevenue, onGoToDrops, onNewDrop, onGoToSettings, onGoToCustomers }) {
+function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems, getDropOrders, getDropItems, getOrderItems, onViewDrop, onShowRevenue, onGoToDrops, onNewDrop, onGoToSettings, onGoToCustomers, onGoToWelcomeEmail }) {
   const activeDrops = drops.filter(d => d.status === "active" && !d.archived);
   const nonArchived = drops.filter(d => !d.archived);
   const confirmedOrders = orders.filter(o => o.status !== "cancelled");
@@ -586,14 +726,16 @@ function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems
   const hasProfile = creator?.name && creator.name !== "My Food Business";
   const hasDrops = drops.length > 0;
   const hasOrders = orders.length > 0;
+  const hasWelcomeEmail = !!(creator?.bio);
   const isNewCreator = !hasDrops;
 
   // Getting started steps
   const steps = [
     { num: 1, title: "Set up your profile", desc: "Add your business name and tagline so customers know who you are.", done: hasProfile, action: onGoToSettings },
-    { num: 2, title: "Create your first drop", desc: "Add menu items, set a pickup date and location, and upload food photos.", done: hasDrops, action: onNewDrop },
-    { num: 3, title: "Share your page with customers", desc: "Copy your customer link and send it out via text or email.", done: hasDrops && customers.length > 0, action: null },
-    { num: 4, title: "Manage incoming orders", desc: "Track who ordered, view your prep summary, and mark pickups complete.", done: hasOrders, action: onGoToDrops },
+    { num: 2, title: "Write your welcome email", desc: "Introduce yourself to new customers — they'll receive this within an hour of joining your list or placing their first order.", done: hasWelcomeEmail, action: onGoToWelcomeEmail },
+    { num: 3, title: "Create your first drop", desc: "Add menu items, set a pickup date and location, and upload food photos.", done: hasDrops, action: onNewDrop },
+    { num: 4, title: "Share your page with customers", desc: "Copy your customer link and send it out via text or email.", done: hasDrops && customers.length > 0, action: null },
+    { num: 5, title: "Manage incoming orders", desc: "Track who ordered, view your prep summary, and mark pickups complete.", done: hasOrders, action: onGoToDrops },
   ];
 
   return (<>
@@ -620,7 +762,7 @@ function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems
       <div className="stat-card stat-card-clickable" onClick={onShowRevenue}>
         <div className="stat-label">Total Revenue →</div>
         <div className="stat-value">{fmt(totalRev)}</div>
-        <div className="stat-sub">Click for breakdown</div>
+        <div className="stat-sub">View Reports</div>
       </div>
       <div className="stat-card">
         <div className="stat-label">Orders</div>
@@ -651,80 +793,570 @@ function DashboardTab({ creator, customers, drops, orders, orderItems, dropItems
 }
 
 // ============================================================
-// REVENUE MODAL
+// REPORTS TAB — Sales Summary + Item Summary
 // ============================================================
-function RevenueModal({ drops, orders, getDropOrders, getOrderItems, customers, onClose, onViewDrop }) {
-  const nonArchived = drops.filter(d => !d.archived);
-  const confirmedOrders = orders.filter(o => o.status !== "cancelled");
-  const totalRev = confirmedOrders.reduce((s, o) => s + Number(o.total), 0);
 
-  // Revenue per drop
-  const dropRevenue = nonArchived.map(drop => {
-    const dO = getDropOrders(drop.id).filter(o => o.status !== "cancelled");
-    return { ...drop, revenue: dO.reduce((s, o) => s + Number(o.total), 0), orderCount: dO.length };
-  }).filter(d => d.orderCount > 0).sort((a, b) => b.revenue - a.revenue);
-  const maxDropRev = Math.max(...dropRevenue.map(d => d.revenue), 1);
+// Date range helpers
+function getDateRange(preset, customStart, customEnd) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (preset) {
+    case "7d": return { start: new Date(today - 6 * 86400000), end: new Date(today.getTime() + 86399999) };
+    case "30d": return { start: new Date(today - 29 * 86400000), end: new Date(today.getTime() + 86399999) };
+    case "90d": return { start: new Date(today - 89 * 86400000), end: new Date(today.getTime() + 86399999) };
+    case "year": return { start: new Date(today.getFullYear(), 0, 1), end: new Date(today.getTime() + 86399999) };
+    case "all": return { start: new Date("2000-01-01"), end: new Date(today.getTime() + 86399999) };
+    case "custom": return { start: customStart ? new Date(customStart + "T00:00:00") : new Date("2000-01-01"), end: customEnd ? new Date(customEnd + "T23:59:59") : new Date(today.getTime() + 86399999) };
+    default: return { start: new Date("2000-01-01"), end: new Date(today.getTime() + 86399999) };
+  }
+}
 
-  // Top selling items
-  const itemSales = {};
-  confirmedOrders.forEach(order => {
-    getOrderItems(order.id).forEach(oi => {
-      const key = oi.item_name;
-      if (!itemSales[key]) itemSales[key] = { name: key, qty: 0, revenue: 0 };
-      itemSales[key].qty += oi.quantity;
-      itemSales[key].revenue += oi.quantity * Number(oi.item_price);
-    });
+function DateRangeSelector({ preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd }) {
+  const presets = [
+    { key: "7d", label: "Last 7 Days" },
+    { key: "30d", label: "Last 30 Days" },
+    { key: "90d", label: "Last 90 Days" },
+    { key: "year", label: "This Year" },
+    { key: "all", label: "All Time" },
+    { key: "custom", label: "Custom" },
+  ];
+  return (
+    <div style={{marginBottom: 24}}>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom: preset==="custom" ? 12 : 0}}>
+        {presets.map(p => (
+          <button key={p.key} onClick={()=>setPreset(p.key)}
+            className={`btn btn-sm ${preset===p.key ? "btn-primary" : "btn-secondary"}`}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {preset === "custom" && (
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginTop:12,padding:"12px 16px",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <label style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)",whiteSpace:"nowrap"}}>From</label>
+            <input type="date" className="form-input" style={{width:160}} value={customStart} onChange={e=>setCustomStart(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <label style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)",whiteSpace:"nowrap"}}>To</label>
+            <input type="date" className="form-input" style={{width:160}} value={customEnd} onChange={e=>setCustomEnd(e.target.value)}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReportsTab({ drops, orders, orderItems, customers, getDropOrders, getDropItems, getOrderItems, onViewDrop }) {
+  const [report, setReport] = useState("sales");
+  const [itemSubview, setItemSubview] = useState("byItem");
+  const [preset, setPreset] = useState("all");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+
+  const { start, end } = getDateRange(preset, customStart, customEnd);
+
+  // Filter orders to date range using created_at
+  const allConfirmed = orders.filter(o => o.status !== "cancelled");
+  const rangeOrders = allConfirmed.filter(o => {
+    const d = new Date(o.created_at);
+    return d >= start && d <= end;
   });
-  const topItems = Object.values(itemSales).sort((a, b) => b.revenue - a.revenue).slice(0, 8);
-  const maxItemRev = Math.max(...topItems.map(i => i.revenue), 1);
 
-  // Repeat customers
-  const custOrderCounts = {};
-  confirmedOrders.forEach(o => { if (o.customer_id) { custOrderCounts[o.customer_id] = (custOrderCounts[o.customer_id] || 0) + 1; } });
-  const repeatCustomers = Object.values(custOrderCounts).filter(c => c > 1).length;
-  const avgOrderValue = confirmedOrders.length > 0 ? totalRev / confirmedOrders.length : 0;
+  // Also filter drops whose pickup_date falls in range (for context)
+  const nonArchived = drops.filter(d => !d.archived);
 
   return (
-    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:640}}>
-      <div className="modal-header"><h2>Revenue Breakdown</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
-
-      <div className="stats-row" style={{marginBottom:24}}>
-        <div className="stat-card"><div className="stat-label">Total Revenue</div><div className="stat-value">{fmt(totalRev)}</div></div>
-        <div className="stat-card"><div className="stat-label">Avg Order</div><div className="stat-value">{fmt(avgOrderValue)}</div></div>
-        <div className="stat-card"><div className="stat-label">Repeat Customers</div><div className="stat-value">{repeatCustomers}</div></div>
+    <div>
+      <div style={{marginBottom:28}}>
+        <h1>Reports</h1>
+        <p style={{color:"var(--text-secondary)",marginTop:4}}>Review your sales performance and item breakdown.</p>
       </div>
 
-      {dropRevenue.length > 0 && (<div style={{marginBottom:24}}>
-        <h3 style={{marginBottom:12}}>Revenue by Drop</h3>
-        {dropRevenue.map(drop => (
-          <div key={drop.id} className="rev-bar-row" style={{cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
-            <div className="rev-bar-label" title={drop.title}>{drop.title}</div>
-            <div className="rev-bar-track"><div className="rev-bar-fill" style={{width:`${(drop.revenue/maxDropRev)*100}%`}}/></div>
-            <div className="rev-bar-val">{fmt(drop.revenue)}</div>
-          </div>
-        ))}
-      </div>)}
+      {/* Report type selector */}
+      <div className="view-tabs" style={{maxWidth:520,marginBottom:28}}>
+        <button className={`view-tab ${report==="sales"?"active":""}`} onClick={()=>setReport("sales")}>Sales Summary</button>
+        <button className={`view-tab ${report==="items"?"active":""}`} onClick={()=>setReport("items")}>Item Summary</button>
+        <button className={`view-tab ${report==="customers"?"active":""}`} onClick={()=>setReport("customers")}>Customer Summary</button>
+      </div>
 
-      {topItems.length > 0 && (<div>
-        <h3 style={{marginBottom:12}}>Top Selling Items</h3>
-        {topItems.map((item, i) => (
-          <div key={i} className="rev-bar-row">
-            <div className="rev-bar-label" title={item.name}>{item.name}</div>
-            <div className="rev-bar-track"><div className="rev-bar-fill" style={{width:`${(item.revenue/maxItemRev)*100}%`,background:"var(--green)"}}/></div>
-            <div className="rev-bar-val">{item.qty} sold · {fmt(item.revenue)}</div>
-          </div>
-        ))}
-      </div>)}
+      {report === "sales" && (
+        <SalesSummary
+          drops={nonArchived} orders={rangeOrders} allOrders={allConfirmed}
+          customers={customers} getDropOrders={getDropOrders} getOrderItems={getOrderItems}
+          onViewDrop={onViewDrop} preset={preset} setPreset={setPreset}
+          customStart={customStart} setCustomStart={setCustomStart}
+          customEnd={customEnd} setCustomEnd={setCustomEnd}
+          start={start} end={end}
+        />
+      )}
+      {report === "items" && (
+        <ItemSummary
+          drops={nonArchived} orders={rangeOrders} getDropItems={getDropItems}
+          getOrderItems={getOrderItems} onViewDrop={onViewDrop}
+          subview={itemSubview} setSubview={setItemSubview}
+          preset={preset} setPreset={setPreset}
+          customStart={customStart} setCustomStart={setCustomStart}
+          customEnd={customEnd} setCustomEnd={setCustomEnd}
+        />
+      )}
+      {report === "customers" && (
+        <CustomerSummary
+          drops={nonArchived} orders={rangeOrders} customers={customers}
+          getOrderItems={getOrderItems}
+          preset={preset} setPreset={setPreset}
+          customStart={customStart} setCustomStart={setCustomStart}
+          customEnd={customEnd} setCustomEnd={setCustomEnd}
+        />
+      )}
+    </div>
+  );
+}
 
-      {dropRevenue.length === 0 && <div className="empty-state"><p>No revenue data yet. Revenue will appear here after your first orders.</p></div>}
-    </div></div>
+// ── Sales Summary ──────────────────────────────────────────────
+function SalesSummary({ drops, orders, allOrders, customers, getDropOrders, getOrderItems, onViewDrop, preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd, start, end }) {
+  const totalRev = orders.reduce((s, o) => s + Number(o.total), 0);
+  const avgOrder = orders.length > 0 ? totalRev / orders.length : 0;
+
+  // Customer loyalty within range
+  const custOrderCounts = {};
+  orders.forEach(o => { if (o.customer_id) custOrderCounts[o.customer_id] = (custOrderCounts[o.customer_id] || 0) + 1; });
+  const repeatCustomers = Object.values(custOrderCounts).filter(c => c > 1).length;
+  const firstTimeCustomers = Object.values(custOrderCounts).filter(c => c === 1).length;
+
+  // Uncollected cash — active drops only
+  const activeDrops = drops.filter(d => d.status === "active");
+  const uncollected = activeDrops.reduce((sum, drop) => {
+    const dOrders = getDropOrders(drop.id).filter(o => o.status !== "cancelled" && o.status !== "picked_up");
+    return sum + dOrders.reduce((s, o) => s + Number(o.total), 0);
+  }, 0);
+
+  // Drop-by-drop breakdown filtered to range
+  const dropRows = drops.map(drop => {
+    const dOrders = getDropOrders(drop.id).filter(o => {
+      if (o.status === "cancelled") return false;
+      const d = new Date(o.created_at);
+      return d >= start && d <= end;
+    });
+    return { ...drop, revenue: dOrders.reduce((s, o) => s + Number(o.total), 0), orderCount: dOrders.length };
+  }).filter(d => d.orderCount > 0).sort((a, b) => new Date(b.pickup_date) - new Date(a.pickup_date));
+
+  // Best drop in range
+  const bestDrop = [...dropRows].sort((a, b) => b.revenue - a.revenue)[0] || null;
+
+  return (
+    <>
+      <DateRangeSelector preset={preset} setPreset={setPreset} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
+
+      {/* Top stats */}
+      <div className="stats-row" style={{marginBottom:24}}>
+        <div className="stat-card">
+          <div className="stat-label">Total Revenue</div>
+          <div className="stat-value">{fmt(totalRev)}</div>
+          <div className="stat-sub">{orders.length} order{orders.length!==1?"s":""}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Avg Order Value</div>
+          <div className="stat-value">{fmt(avgOrder)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Total Orders</div>
+          <div className="stat-value">{orders.length}</div>
+        </div>
+        {uncollected > 0 && (
+          <div className="stat-card" style={{borderLeft:"4px solid var(--gold)"}}>
+            <div className="stat-label" style={{color:"var(--gold)"}}>Uncollected Cash</div>
+            <div className="stat-value" style={{color:"var(--gold)"}}>{fmt(uncollected)}</div>
+            <div className="stat-sub">Active drop(s) — cash due at pickup</div>
+          </div>
+        )}
+      </div>
+
+      {/* Best Drop */}
+      {bestDrop && (
+        <div style={{background:"var(--gold-light)",border:"1px solid #f0dca0",borderRadius:"var(--radius)",padding:"16px 20px",marginBottom:24,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>onViewDrop(bestDrop)}>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,color:"var(--gold)",marginBottom:4}}>🏆 Best Drop</div>
+            <div style={{fontWeight:600,fontSize:16}}>{bestDrop.title}</div>
+            <div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{bestDrop.orderCount} orders · {fmtDate(bestDrop.pickup_date)}</div>
+          </div>
+          <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:700,color:"var(--gold)"}}>{fmt(bestDrop.revenue)}</div>
+        </div>
+      )}
+
+      {/* Customer loyalty */}
+      {(repeatCustomers > 0 || firstTimeCustomers > 0) && (
+        <div style={{marginBottom:24}}>
+          <h3 style={{marginBottom:12}}>Customer Loyalty</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <div style={{background:"var(--green-light)",borderRadius:"var(--radius-sm)",padding:"14px 16px"}}>
+              <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,color:"var(--green)",marginBottom:4}}>Repeat Customers</div>
+              <div style={{fontFamily:"var(--font-display)",fontSize:28,fontWeight:700,color:"var(--green)"}}>{repeatCustomers}</div>
+              <div style={{fontSize:12,color:"var(--green)",marginTop:2,opacity:.8}}>2+ orders placed</div>
+            </div>
+            <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"14px 16px"}}>
+              <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,color:"var(--text-tertiary)",marginBottom:4}}>First-Time Customers</div>
+              <div style={{fontFamily:"var(--font-display)",fontSize:28,fontWeight:700}}>{firstTimeCustomers}</div>
+              <div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:2}}>1 order placed</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drop-by-drop table */}
+      {dropRows.length > 0 ? (
+        <div>
+          <h3 style={{marginBottom:12}}>Revenue by Drop</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Drop</th>
+                  <th>Pickup Date</th>
+                  <th>Orders</th>
+                  <th>Revenue</th>
+                  <th>Avg Order</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dropRows.map(drop => (
+                  <tr key={drop.id} style={{cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
+                    <td><div style={{fontWeight:600}}>{drop.title}</div></td>
+                    <td style={{color:"var(--text-secondary)",fontSize:13}}>{fmtDate(drop.pickup_date)}</td>
+                    <td>{drop.orderCount}</td>
+                    <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(drop.revenue)}</td>
+                    <td style={{color:"var(--text-secondary)"}}>{fmt(drop.orderCount > 0 ? drop.revenue / drop.orderCount : 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{borderTop:"2px solid var(--border)"}}>
+                  <td colSpan={2} style={{fontWeight:700,paddingTop:12}}>Total</td>
+                  <td style={{fontWeight:700}}>{dropRows.reduce((s,d)=>s+d.orderCount,0)}</td>
+                  <td style={{fontWeight:700,color:"var(--accent)"}}>{fmt(dropRows.reduce((s,d)=>s+d.revenue,0))}</td>
+                  <td/>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state"><p>No sales data for this date range.</p></div>
+      )}
+    </>
+  );
+}
+
+// ── Item Summary ───────────────────────────────────────────────
+function ItemSummary({ drops, orders, getDropItems, getOrderItems, onViewDrop, subview, setSubview, preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd }) {
+
+  // Build item-level data across all orders in range
+  const itemSales = {};
+  orders.forEach(order => {
+    getOrderItems(order.id).forEach(oi => {
+      const key = oi.item_name;
+      if (!itemSales[key]) itemSales[key] = { name: key, qty: 0, revenue: 0, orders: 0 };
+      itemSales[key].qty += oi.quantity;
+      itemSales[key].revenue += oi.quantity * Number(oi.item_price);
+      itemSales[key].orders += 1;
+    });
+  });
+  const itemRows = Object.values(itemSales).sort((a, b) => b.revenue - a.revenue);
+  const maxItemRev = Math.max(...itemRows.map(i => i.revenue), 1);
+
+  // Build drop-level data
+  const { start, end } = getDateRange(preset, customStart, customEnd);
+  const dropRows = drops.map(drop => {
+    const dOrders = getDropOrders_local(drop.id, orders, getOrderItems);
+    const filtered = dOrders.filter(o => {
+      if (o.status === "cancelled") return false;
+      const d = new Date(o.created_at);
+      return d >= start && d <= end;
+    });
+    const dItems = getDropItems(drop.id);
+    const itemBreakdown = dItems.map(di => {
+      const sold = filtered.reduce((sum, o) => {
+        const oi = getOrderItems(o.id).find(x => x.drop_item_id === di.id);
+        return sum + (oi ? oi.quantity : 0);
+      }, 0);
+      return { name: di.name, price: di.price, sold, revenue: sold * Number(di.price) };
+    }).filter(i => i.sold > 0);
+    const revenue = filtered.reduce((s, o) => s + Number(o.total), 0);
+    return { ...drop, orderCount: filtered.length, revenue, itemBreakdown };
+  }).filter(d => d.orderCount > 0).sort((a, b) => new Date(b.pickup_date) - new Date(a.pickup_date));
+
+  return (
+    <>
+      <DateRangeSelector preset={preset} setPreset={setPreset} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
+
+      {/* Sub-view toggle */}
+      <div className="view-tabs" style={{maxWidth:300,marginBottom:24}}>
+        <button className={`view-tab ${subview==="byItem"?"active":""}`} onClick={()=>setSubview("byItem")}>By Item</button>
+        <button className={`view-tab ${subview==="byDrop"?"active":""}`} onClick={()=>setSubview("byDrop")}>By Drop</button>
+      </div>
+
+      {/* By Item view */}
+      {subview === "byItem" && (
+        itemRows.length > 0 ? (
+          <div>
+            <h3 style={{marginBottom:12}}>All Items — Sales Totals</h3>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Units Sold</th>
+                    <th>Revenue</th>
+                    <th style={{width:200}}>Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemRows.map((item, i) => (
+                    <tr key={i}>
+                      <td style={{fontWeight:600}}>{item.name}</td>
+                      <td>{item.qty}</td>
+                      <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(item.revenue)}</td>
+                      <td>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <div style={{flex:1,height:8,background:"var(--surface-alt)",borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",background:"var(--accent)",borderRadius:4,width:`${(item.revenue/maxItemRev)*100}%`}}/>
+                          </div>
+                          <span style={{fontSize:12,color:"var(--text-tertiary)",width:36,textAlign:"right"}}>{Math.round((item.revenue/maxItemRev)*100)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{borderTop:"2px solid var(--border)"}}>
+                    <td style={{fontWeight:700,paddingTop:12}}>Total</td>
+                    <td style={{fontWeight:700}}>{itemRows.reduce((s,i)=>s+i.qty,0)}</td>
+                    <td style={{fontWeight:700,color:"var(--accent)"}}>{fmt(itemRows.reduce((s,i)=>s+i.revenue,0))}</td>
+                    <td/>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        ) : <div className="empty-state"><p>No item sales data for this date range.</p></div>
+      )}
+
+      {/* By Drop view */}
+      {subview === "byDrop" && (
+        dropRows.length > 0 ? (
+          <div style={{display:"grid",gap:16}}>
+            <h3>Items Sold — by Drop</h3>
+            {dropRows.map(drop => (
+              <div key={drop.id} className="card">
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,cursor:"pointer"}} onClick={()=>onViewDrop(drop)}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:16}}>{drop.title}</div>
+                    <div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>{fmtDate(drop.pickup_date)} · {drop.orderCount} orders · {fmt(drop.revenue)}</div>
+                  </div>
+                  <span style={{fontSize:12,color:"var(--accent)",fontWeight:600}}>View Drop →</span>
+                </div>
+                {drop.itemBreakdown.length > 0 ? (
+                  <div className="table-wrap" style={{border:"none",borderRadius:0,background:"transparent"}}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Item</th>
+                          <th>Price</th>
+                          <th>Sold</th>
+                          <th>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {drop.itemBreakdown.map((item, i) => (
+                          <tr key={i}>
+                            <td style={{fontWeight:500}}>{item.name}</td>
+                            <td style={{color:"var(--text-secondary)"}}>{fmt(item.price)}</td>
+                            <td>{item.sold}</td>
+                            <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(item.revenue)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div style={{fontSize:13,color:"var(--text-tertiary)"}}>No item data available.</div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : <div className="empty-state"><p>No drop data for this date range.</p></div>
+      )}
+    </>
+  );
+}
+
+// Helper used inside ItemSummary to get orders for a drop without prop drilling getDropOrders
+function getDropOrders_local(dropId, orders) {
+  return orders.filter(o => o.drop_id === dropId);
+}
+
+// ── Customer Summary ───────────────────────────────────────────
+function CustomerSummary({ drops, orders, customers, getOrderItems, preset, setPreset, customStart, setCustomStart, customEnd, setCustomEnd }) {
+  const [sortKey, setSortKey] = useState("spent");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const handleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === "desc" ? "asc" : "desc");
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+
+  const SortIcon = ({ col }) => {
+    if (sortKey !== col) return <span style={{color:"var(--text-tertiary)",fontSize:10,marginLeft:4}}>↕</span>;
+    return <span style={{color:"var(--accent)",fontSize:10,marginLeft:4}}>{sortDir==="desc"?"↓":"↑"}</span>;
+  };
+
+  // Build per-customer stats from range orders
+  const custMap = {};
+  orders.forEach(o => {
+    const key = o.customer_id || ("guest_" + (o.customer_email || o.customer_name || o.id));
+    if (!custMap[key]) {
+      const cust = customers.find(c => c.id === o.customer_id);
+      custMap[key] = {
+        id: o.customer_id,
+        name: cust?.name || o.customer_name || "Guest",
+        email: cust?.email || o.customer_email || "",
+        totalSpent: 0,
+        orderCount: 0,
+        firstOrder: null,
+        lastOrder: null,
+        dropIds: new Set(),
+      };
+    }
+    custMap[key].totalSpent += Number(o.total);
+    custMap[key].orderCount += 1;
+    const d = new Date(o.created_at);
+    if (!custMap[key].firstOrder || d < custMap[key].firstOrder) custMap[key].firstOrder = d;
+    if (!custMap[key].lastOrder || d > custMap[key].lastOrder) custMap[key].lastOrder = d;
+    if (o.drop_id) custMap[key].dropIds.add(o.drop_id);
+  });
+
+  let rows = Object.values(custMap).map(c => ({
+    ...c,
+    dropIds: Array.from(c.dropIds),
+    isRepeat: c.orderCount > 1,
+  }));
+
+  // Sort
+  rows.sort((a, b) => {
+    let av, bv;
+    switch (sortKey) {
+      case "spent":    av = a.totalSpent;   bv = b.totalSpent;   break;
+      case "orders":   av = a.orderCount;   bv = b.orderCount;   break;
+      case "last":     av = a.lastOrder;    bv = b.lastOrder;    break;
+      case "first":    av = a.firstOrder;   bv = b.firstOrder;   break;
+      case "name":     av = a.name.toLowerCase(); bv = b.name.toLowerCase(); break;
+      default:         av = a.totalSpent;   bv = b.totalSpent;
+    }
+    if (av < bv) return sortDir === "desc" ? 1 : -1;
+    if (av > bv) return sortDir === "desc" ? -1 : 1;
+    return 0;
+  });
+
+  const totalRevenue = rows.reduce((s, c) => s + c.totalSpent, 0);
+  const repeatCount = rows.filter(c => c.isRepeat).length;
+  const topSpender = rows[0] || null;
+
+  // Map drop ids to titles for the drops column
+  const dropTitle = (id) => drops.find(d => d.id === id)?.title || "Unknown Drop";
+
+  return (
+    <>
+      <DateRangeSelector preset={preset} setPreset={setPreset} customStart={customStart} setCustomStart={setCustomStart} customEnd={customEnd} setCustomEnd={setCustomEnd}/>
+
+      {/* Summary stats */}
+      <div className="stats-row" style={{marginBottom:24}}>
+        <div className="stat-card">
+          <div className="stat-label">Customers Who Ordered</div>
+          <div className="stat-value">{rows.length}</div>
+          <div className="stat-sub">in this date range</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Repeat Buyers</div>
+          <div className="stat-value" style={{color:"var(--green)"}}>{repeatCount}</div>
+          <div className="stat-sub">{rows.length > 0 ? Math.round((repeatCount/rows.length)*100) : 0}% of customers</div>
+        </div>
+        {topSpender && (
+          <div className="stat-card">
+            <div className="stat-label">Top Customer</div>
+            <div className="stat-value" style={{fontSize:20}}>{topSpender.name}</div>
+            <div className="stat-sub">{fmt(topSpender.totalSpent)} across {topSpender.orderCount} order{topSpender.orderCount!==1?"s":""}</div>
+          </div>
+        )}
+      </div>
+
+      {rows.length > 0 ? (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <h3>Customer Breakdown</h3>
+            <div style={{fontSize:12,color:"var(--text-tertiary)"}}>Click column headers to sort</div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("name")}>Customer <SortIcon col="name"/></th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("spent")}>Total Spent <SortIcon col="spent"/></th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("orders")}>Orders <SortIcon col="orders"/></th>
+                  <th>Status</th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("first")}>First Order <SortIcon col="first"/></th>
+                  <th style={{cursor:"pointer"}} onClick={()=>handleSort("last")}>Last Order <SortIcon col="last"/></th>
+                  <th>Drops</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((cust, i) => (
+                  <tr key={cust.id || i}>
+                    <td>
+                      <div style={{fontWeight:600}}>{cust.name}</div>
+                      {cust.email && <div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:2}}>{cust.email}</div>}
+                    </td>
+                    <td style={{fontWeight:600,color:"var(--accent)"}}>{fmt(cust.totalSpent)}</td>
+                    <td>{cust.orderCount}</td>
+                    <td>
+                      <span className={`badge ${cust.isRepeat ? "badge-active" : "badge-preorder"}`} style={{fontSize:11}}>
+                        {cust.isRepeat ? "Repeat" : "First-time"}
+                      </span>
+                    </td>
+                    <td style={{fontSize:13,color:"var(--text-secondary)"}}>{cust.firstOrder ? fmtDate(cust.firstOrder.toISOString().slice(0,10)) : "—"}</td>
+                    <td style={{fontSize:13,color:"var(--text-secondary)"}}>{cust.lastOrder ? fmtDate(cust.lastOrder.toISOString().slice(0,10)) : "—"}</td>
+                    <td>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {cust.dropIds.map(id => (
+                          <span key={id} style={{fontSize:11,background:"var(--surface-alt)",border:"1px solid var(--border)",borderRadius:12,padding:"2px 8px",whiteSpace:"nowrap"}}>
+                            {dropTitle(id)}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{borderTop:"2px solid var(--border)"}}>
+                  <td style={{fontWeight:700,paddingTop:12}}>Total</td>
+                  <td style={{fontWeight:700,color:"var(--accent)"}}>{fmt(totalRevenue)}</td>
+                  <td style={{fontWeight:700}}>{rows.reduce((s,c)=>s+c.orderCount,0)}</td>
+                  <td colSpan={4}/>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state"><p>No customer orders found for this date range.</p></div>
+      )}
+    </>
   );
 }
 
 // ============================================================
 // DROPS TAB — with archive toggle
 // ============================================================
-function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive, onDuplicate }) {
+function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive, onDuplicate, onDeletePermanently }) {
   const [showArchived, setShowArchived] = useState(false);
   const visible = showArchived ? drops : drops.filter(d => !d.archived);
   const archivedCount = drops.filter(d => d.archived).length;
@@ -738,7 +1370,7 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
       </div>
     </div>
     {visible.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.drop}</div><h3>No drops yet</h3><p style={{marginTop:8}}>Create your first drop to start taking orders.</p></div>):(
-      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
+      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button><button className="btn btn-danger btn-sm" onClick={e=>{e.stopPropagation();onDeletePermanently(drop)}}>{I.trash} Delete</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
     )}
   </>);
 }
@@ -839,7 +1471,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
 // ============================================================
 // CUSTOMERS TAB + DETAIL — Enhanced CRM v7
 // ============================================================
-function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, onCompose, onSelectCustomer, onImport }) {
+function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, onCompose, onSelectCustomer, onImport, onBulkDelete }) {
   const [copied, setCopied] = useState(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState([]);
@@ -924,6 +1556,7 @@ function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, 
       <div className="bulk-bar"><div className="bulk-bar-count">{selected.length} selected</div><div className="bulk-bar-actions">
         {selEmails.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>copySelected("email")}>{copied==="sel-email"?<>{I.check} Copied!</>:<>{I.mail} {selEmails.length} Email{selEmails.length!==1?"s":""}</>}</button>}
         {selSms.length > 0 && <button className="btn btn-secondary btn-sm" onClick={()=>copySelected("sms")}>{copied==="sel-sms"?<>{I.check} Copied!</>:<>{I.phone} {selSms.length} Phone{selSms.length!==1?"s":""}</>}</button>}
+        <button className="btn btn-danger btn-sm" onClick={()=>onBulkDelete(selected)}>{I.trash} Delete {selected.length}</button>
         <button className="btn btn-ghost btn-sm" onClick={()=>setSelected([])}>Clear</button>
       </div></div>
     )}
@@ -1004,12 +1637,35 @@ function CustomerDetail({ customer, orders, drops, getOrderItems, onBack, onEdit
 // ============================================================
 // SETTINGS TAB
 // ============================================================
-function SettingsTab({ creator, onEditProfile, session, showToast }) {
+function SettingsTab({ creator, onEditProfile, onSaveWelcomeEmail, session, showToast }) {
   const customerUrl = `${window.location.origin}${window.location.pathname}#/${creator?.slug || ""}`;
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Welcome email state
+  const [logoUrl, setLogoUrl] = useState(creator?.logo_data?.url || creator?.logo_url || "");
+  const [logoPan, setLogoPan] = useState({ x: creator?.logo_data?.x ?? 50, y: creator?.logo_data?.y ?? 50 });
+  const [welcomePhotoUrl, setWelcomePhotoUrl] = useState(creator?.welcome_photo_data?.url || creator?.welcome_photo_url || "");
+  const [welcomePhotoPan, setWelcomePhotoPan] = useState({ x: creator?.welcome_photo_data?.x ?? 50, y: creator?.welcome_photo_data?.y ?? 50 });
+  const [bio, setBio] = useState(creator?.bio || "");
+  const [howDropsWork, setHowDropsWork] = useState(creator?.how_drops_work || "");
+  const [instagram, setInstagram] = useState(creator?.social_links?.instagram || "");
+  const [facebook, setFacebook] = useState(creator?.social_links?.facebook || "");
+  const [tiktok, setTiktok] = useState(creator?.social_links?.tiktok || "");
+  const [savingWelcome, setSavingWelcome] = useState(false);
+
+  const handleSaveWelcome = async () => {
+    setSavingWelcome(true);
+    await onSaveWelcomeEmail({
+      logoUrl, logoPan, welcomePhotoUrl, welcomePhotoPan, bio, howDropsWork,
+      socialLinks: { instagram, facebook, tiktok },
+    });
+    setSavingWelcome(false);
+  };
+
+  const welcomeComplete = !!(bio);
 
   const handleChangeEmail = async () => {
     if (!newEmail) return;
@@ -1032,6 +1688,10 @@ function SettingsTab({ creator, onEditProfile, session, showToast }) {
     setNewPassword(""); setConfirmPassword("");
   };
 
+  const themeKey = creator?.theme?.key || "terracotta";
+  const themeAccent = creator?.theme?.accent || THEMES.terracotta.accent;
+  const themeName = THEMES[themeKey]?.name || "Custom";
+
   return (<>
     <div style={{marginBottom:28}}><h1>Settings</h1><p style={{color:"var(--text-secondary)",marginTop:4}}>Manage your storefront and account</p></div>
 
@@ -1042,24 +1702,103 @@ function SettingsTab({ creator, onEditProfile, session, showToast }) {
       <div className="form-group"><label className="form-label">Tagline</label><div style={{fontSize:14,color:"var(--text-secondary)"}}>{creator?.tagline||"Not set"}</div></div>
       <div className="form-group"><label className="form-label">Your Page URL</label><div style={{fontSize:14,fontWeight:500,color:"var(--accent)",wordBreak:"break-all"}}>{customerUrl}</div><div className="form-hint">Share this link with your customers</div></div>
       <div className="form-group"><label className="form-label">URL Slug</label><div style={{fontSize:14,fontWeight:500}}>{creator?.slug||"Not set"}</div></div>
-      <div style={{padding:16,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",marginTop:8}}>
-        <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Customer Page Preview</div>
-        <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:700}}>{creator?.name||"Your Business"}</div>
-        <div style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{creator?.tagline||"Your tagline here"}</div>
+      <div style={{marginTop:8}}>
+        <label className="form-label">{I.palette} Storefront Theme</label>
+        <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)"}}>
+          <div style={{width:28,height:28,borderRadius:"50%",background:themeAccent,flexShrink:0}}/>
+          <div><div style={{fontWeight:600,fontSize:14}}>{themeName}</div><div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:2}}>Click Edit to change theme or upload a hero image</div></div>
+          {creator?.hero_image_url && <img src={creator.hero_image_url} alt="" style={{width:48,height:32,objectFit:"cover",borderRadius:6,marginLeft:"auto",flexShrink:0}}/>}
+        </div>
       </div>
+    </div>
+
+    {/* Welcome Email */}
+    <div className="card" id="welcome-email-section" style={{maxWidth:600,marginBottom:24,borderLeft: welcomeComplete ? "4px solid var(--green)" : "4px solid var(--gold)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+        <div>
+          <h2 style={{marginBottom:4}}>Welcome Email</h2>
+          <p style={{fontSize:13,color:"var(--text-secondary)"}}>
+            New customers receive this email within 1 hour of their first order or signup — automatically, in your voice.
+          </p>
+        </div>
+        {welcomeComplete
+          ? <span className="badge badge-active" style={{flexShrink:0,marginLeft:12}}>✓ Set up</span>
+          : <span className="badge badge-confirmed" style={{flexShrink:0,marginLeft:12}}>Incomplete</span>
+        }
+      </div>
+
+      {/* Guidance callout */}
+      <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"14px 16px",marginBottom:20,fontSize:13,color:"var(--text-secondary)",lineHeight:1.6}}>
+        <strong style={{color:"var(--text)",display:"block",marginBottom:4}}>What to include</strong>
+        Think of this as your first impression — a personal note from you to someone who just discovered your food. Tell them who you are, what drives you to cook, and what they can expect from ordering with you. The more genuine and personal it feels, the more likely they are to order again.
+      </div>
+
+      {/* Logo */}
+      <ImageUpload value={logoUrl} onChange={setLogoUrl} panValue={logoPan} onPanChange={setLogoPan} label="Your Logo (optional)" frameRatio="circle"/>
+
+      {/* Welcome photo */}
+      <ImageUpload value={welcomePhotoUrl} onChange={setWelcomePhotoUrl} panValue={welcomePhotoPan} onPanChange={setWelcomePhotoPan} label="Photo of You or Your Food (optional)" frameRatio="4:3"/>
+
+      {/* Bio */}
+      <div className="form-group">
+        <label className="form-label">Your Introduction {!bio && <span style={{color:"var(--gold)",fontSize:11,fontWeight:400,marginLeft:4}}>Required</span>}</label>
+        <textarea
+          className="form-textarea"
+          rows={6}
+          placeholder={"Introduce yourself — who you are, where you cook, and what drives you to make food. Share the story behind your business. Your customers want to connect with the person behind the food, not just the menu.\n\nAim for 1–3 paragraphs in your own voice. Don't overthink it — write like you'd talk to a friend."}
+          value={bio}
+          onChange={e=>setBio(e.target.value)}
+          style={{minHeight:140}}
+        />
+      </div>
+
+      {/* How drops work */}
+      <div className="form-group">
+        <label className="form-label">How Your Drops Work</label>
+        <textarea
+          className="form-textarea"
+          rows={4}
+          placeholder={"Explain your rhythm in your own words — how often you drop, how long orders stay open, and where/when pickup happens.\n\nExample: \"I post a new drop every other Friday. Orders are open for 48 hours or until things sell out. Pickup is Sunday 12–3pm in Somerville.\""}
+          value={howDropsWork}
+          onChange={e=>setHowDropsWork(e.target.value)}
+          style={{minHeight:100}}
+        />
+      </div>
+
+      {/* Social links */}
+      <div style={{marginBottom:20}}>
+        <label className="form-label">Social Links (optional)</label>
+        <div style={{display:"grid",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"var(--text-secondary)",width:80,flexShrink:0}}>Instagram</span>
+            <input className="form-input" placeholder="@yourbusiness" value={instagram} onChange={e=>setInstagram(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"var(--text-secondary)",width:80,flexShrink:0}}>Facebook</span>
+            <input className="form-input" placeholder="facebook.com/yourpage" value={facebook} onChange={e=>setFacebook(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:"var(--text-secondary)",width:80,flexShrink:0}}>TikTok</span>
+            <input className="form-input" placeholder="@yourbusiness" value={tiktok} onChange={e=>setTiktok(e.target.value)}/>
+          </div>
+        </div>
+      </div>
+
+      <button className="btn btn-primary" disabled={!bio||savingWelcome} onClick={handleSaveWelcome}>
+        {savingWelcome ? "Saving..." : welcomeComplete ? "Update Welcome Email" : "Save Welcome Email"}
+      </button>
+      {!bio && <div className="form-hint" style={{marginTop:8}}>Add your introduction above to save — it's the only required field.</div>}
     </div>
 
     {/* Account Settings */}
     <div className="card" style={{maxWidth:600,marginBottom:24}}>
       <h2 style={{marginBottom:20}}>Account</h2>
       <div className="form-group"><label className="form-label">Current Email</label><div style={{fontSize:14,fontWeight:500}}>{session?.user?.email||"Unknown"}</div></div>
-
       <div style={{borderTop:"1px solid var(--border)",paddingTop:20,marginTop:8}}>
         <h3 style={{marginBottom:12}}>Change Email</h3>
         <div className="form-group"><label className="form-label">New Email</label><input className="form-input" type="email" placeholder="newemail@example.com" value={newEmail} onChange={e=>setNewEmail(e.target.value)}/></div>
         <button className="btn btn-secondary btn-sm" disabled={!newEmail||saving} onClick={handleChangeEmail}>{saving?"Updating...":"Update Email"}</button>
       </div>
-
       <div style={{borderTop:"1px solid var(--border)",paddingTop:20,marginTop:20}}>
         <h3 style={{marginBottom:12}}>Change Password</h3>
         <div className="form-group"><label className="form-label">New Password</label><input className="form-input" type="password" placeholder="At least 6 characters" value={newPassword} onChange={e=>setNewPassword(e.target.value)}/></div>
@@ -1071,72 +1810,229 @@ function SettingsTab({ creator, onEditProfile, session, showToast }) {
 }
 
 // ============================================================
+// CONFIRMATION MODALS — Bulk Delete Customers + Permanent Drop Delete
+// ============================================================
+function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
+  const [step, setStep] = useState("warn"); // warn → choose
+  const [choice, setChoice] = useState(null); // "keep" | "delete"
+
+  if (step === "warn") return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-header"><h2 style={{color:"var(--red)"}}>Delete {count} Customer{count!==1?"s":""}?</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <p style={{fontSize:15,marginBottom:20}}>This will permanently remove <strong>{count} customer{count!==1?"s":""}</strong> from your database. This cannot be undone.</p>
+      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:24}}>What should happen to their order history?</p>
+      <div style={{display:"grid",gap:10,marginBottom:24}}>
+        <label style={{display:"flex",alignItems:"flex-start",gap:12,padding:"14px 16px",border:`2px solid ${choice==="keep"?"var(--accent)":"var(--border)"}`,borderRadius:"var(--radius-sm)",cursor:"pointer",background:choice==="keep"?"var(--accent-light)":"var(--surface)"}} onClick={()=>setChoice("keep")}>
+          <input type="radio" checked={choice==="keep"} onChange={()=>setChoice("keep")} style={{marginTop:2,accentColor:"var(--accent)"}}/>
+          <div><div style={{fontWeight:600}}>Keep order history</div><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>Past orders remain in drop records as guest orders. Revenue data is preserved.</div></div>
+        </label>
+        <label style={{display:"flex",alignItems:"flex-start",gap:12,padding:"14px 16px",border:`2px solid ${choice==="delete"?"var(--red)":"var(--border)"}`,borderRadius:"var(--radius-sm)",cursor:"pointer",background:choice==="delete"?"var(--red-light)":"var(--surface)"}} onClick={()=>setChoice("delete")}>
+          <input type="radio" checked={choice==="delete"} onChange={()=>setChoice("delete")} style={{marginTop:2,accentColor:"var(--red)"}}/>
+          <div><div style={{fontWeight:600,color:"var(--red)"}}>Delete everything</div><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>Customer records and all associated orders are permanently deleted. Revenue data will change.</div></div>
+        </label>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn btn-danger" disabled={!choice} onClick={()=>onConfirm(choice==="delete")}>Delete {count} Customer{count!==1?"s":""}</button>
+      </div>
+    </div></div>
+  );
+}
+
+function PermanentDeleteDropModal({ drop, onConfirm, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-header"><h2 style={{color:"var(--red)"}}>Permanently Delete Drop?</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <p style={{fontSize:15,marginBottom:12}}>You are about to permanently delete <strong>"{drop.title}"</strong>.</p>
+      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:8}}>This will delete:</p>
+      <ul style={{fontSize:14,color:"var(--text-secondary)",paddingLeft:20,marginBottom:20,lineHeight:1.8}}>
+        <li>The drop and all menu items</li>
+        <li>All orders and order items for this drop</li>
+        <li>This drop's revenue data</li>
+      </ul>
+      <div style={{padding:"12px 16px",background:"var(--red-light)",borderRadius:"var(--radius-sm)",fontSize:13,color:"var(--red)",fontWeight:500,marginBottom:24}}>⚠️ This cannot be undone.</div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn btn-danger" onClick={onConfirm}>{I.trash} Delete Permanently</button>
+      </div>
+    </div></div>
+  );
+}
+
+// ============================================================
 // MODALS
 // ============================================================
 
 // --- Image Upload Component ---
-function ImageUpload({ value, onChange, label }) {
+// ============================================================
+// IMAGE UPLOAD WITH PAN-TO-CROP
+// ============================================================
+// frameRatio: "1:1" | "2:1" | "3:1" | "4:3" | "16:9" | "circle"
+// value: image URL string
+// panValue: { x: 0-100, y: 0-100 } — stored in parallel state by parent
+// onChange(url): called when new image is uploaded or removed
+// onPanChange({ x, y }): called as creator drags
+
+const FRAME_META = {
+  "3:1":   { w: 480, h: 160, label: "3:1 wide banner",   hint: "Recommended: 1200×400px — use a landscape photo" },
+  "2:1":   { w: 480, h: 240, label: "2:1 landscape",     hint: "Recommended: 1200×600px — food close-ups work great" },
+  "1:1":   { w: 280, h: 280, label: "1:1 square",        hint: "Recommended: 800×800px — center your subject when shooting" },
+  "4:3":   { w: 480, h: 360, label: "4:3 landscape",     hint: "Recommended: 800×600px — landscape fills email cleanly" },
+  "circle":{ w: 120, h: 120, label: "Circle / logo",     hint: "Recommended: 400×400px — square image, centered subject" },
+};
+
+function ImageUploadWithPan({ value, onChange, panValue, onPanChange, label, frameRatio = "1:1" }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [naturalW, setNaturalW] = useState(0);
+  const [naturalH, setNaturalH] = useState(0);
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const dragRef = useRef(null);
+  const frameRef = useRef(null);
+  const imgRef = useRef(null);
 
-  const compressImage = (file, maxWidth = 1200) => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        let w = img.width, h = img.height;
-        if (w > maxWidth) { h = (h * maxWidth) / w; w = maxWidth; }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.8);
-      };
-      img.onerror = () => resolve(null);
-      img.src = URL.createObjectURL(file);
-    });
-  };
+  const pan = panValue || { x: 50, y: 50 };
+  const fm = FRAME_META[frameRatio] || FRAME_META["1:1"];
+  const isCircle = frameRatio === "circle";
+
+  // Compress before upload — same logic as before
+  const compressImage = (file, maxWidth = 1200) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let w = img.width, h = img.height;
+      if (w > maxWidth) { h = (h * maxWidth) / w; w = maxWidth; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
+    };
+    img.onerror = () => resolve(null);
+    img.src = URL.createObjectURL(file);
+  });
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setError(null);
-
-    // Check file type
     if (!file.type.startsWith("image/")) { setError("Please select an image file."); return; }
-
-    setUploading(true);
-
-    // Compress if larger than 1MB
+    setError(null); setUploading(true);
     let uploadFile = file;
     if (file.size > 1024 * 1024) {
       const compressed = await compressImage(file);
-      if (compressed) {
-        uploadFile = new File([compressed], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
-      }
+      if (compressed) uploadFile = new File([compressed], file.name.replace(/\.\w+$/, ".jpg"), { type: "image/jpeg" });
     }
-
     const { url, error: uploadErr } = await supabase.uploadImage(uploadFile);
     setUploading(false);
-    if (url) { onChange(url); setError(null); }
+    if (url) { onChange(url); onPanChange && onPanChange({ x: 50, y: 50 }); setImgLoaded(false); setError(null); }
     else { setError("Upload failed. Try a smaller image or different format."); console.error("Upload error:", uploadErr); }
   };
+
+  // When image loads, record natural dimensions
+  const handleImgLoad = (e) => {
+    setNaturalW(e.target.naturalWidth);
+    setNaturalH(e.target.naturalHeight);
+    setImgLoaded(true);
+  };
+
+  // Compute scaled image size and position inside the frame
+  const getImgStyle = () => {
+    if (!imgLoaded || !naturalW || !naturalH) return { width: "100%", height: "100%", objectFit: "cover", objectPosition: `${pan.x}% ${pan.y}%` };
+    const scale = Math.max(fm.w / naturalW, fm.h / naturalH);
+    const iw = naturalW * scale;
+    const ih = naturalH * scale;
+    const maxOffX = 0, minOffX = fm.w - iw;
+    const maxOffY = 0, minOffY = fm.h - ih;
+    const ox = Math.max(minOffX, Math.min(maxOffX, (fm.w - iw) * (pan.x / 100)));
+    const oy = Math.max(minOffY, Math.min(maxOffY, (fm.h - ih) * (pan.y / 100)));
+    return { width: iw, height: ih, left: ox, top: oy };
+  };
+
+  // Drag handlers
+  const startDrag = (clientX, clientY) => {
+    if (!imgLoaded) return;
+    const scale = Math.max(fm.w / naturalW, fm.h / naturalH);
+    const iw = naturalW * scale, ih = naturalH * scale;
+    const style = getImgStyle();
+    dragRef.current = { startX: clientX, startY: clientY, startOX: style.left || 0, startOY: style.top || 0, iw, ih };
+    frameRef.current?.classList.add("dragging");
+  };
+
+  const onDrag = (clientX, clientY) => {
+    if (!dragRef.current) return;
+    const { startX, startY, startOX, startOY, iw, ih } = dragRef.current;
+    const dx = clientX - startX, dy = clientY - startY;
+    const newOX = Math.max(fm.w - iw, Math.min(0, startOX + dx));
+    const newOY = Math.max(fm.h - ih, Math.min(0, startOY + dy));
+    const fracX = iw <= fm.w ? 50 : Math.round((newOX / (fm.w - iw)) * 100);
+    const fracY = ih <= fm.h ? 50 : Math.round((newOY / (fm.h - ih)) * 100);
+    onPanChange && onPanChange({ x: Math.max(0, Math.min(100, fracX)), y: Math.max(0, Math.min(100, fracY)) });
+  };
+
+  const endDrag = () => { dragRef.current = null; frameRef.current?.classList.remove("dragging"); };
 
   return (
     <div className="form-group">
       <label className="form-label">{label || "Image"}</label>
-      {value ? (
-        <div style={{position:"relative"}}>
-          <img src={value} alt="" className="img-upload-preview" style={{width:"100%",height:120,objectFit:"cover",borderRadius:"var(--radius-sm)"}}/>
-          <button className="btn btn-sm btn-ghost" onClick={()=>onChange("")} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.6)",color:"#fff",borderRadius:20,padding:"4px 8px"}}>{I.x}</button>
-        </div>
-      ) : (
+
+      {!value ? (
         <div className="img-upload">
           <input type="file" accept="image/*" onChange={handleFile}/>
-          <div>{uploading ? <><div className="spin" style={{width:20,height:20,margin:"0 auto 8px"}}/> Compressing & uploading...</> : <><span style={{color:"var(--accent)"}}>{I.image}</span><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>Click or drag to upload</div></>}</div>
+          <div>{uploading
+            ? <><div className="spin" style={{width:20,height:20,margin:"0 auto 8px"}}/> Uploading...</>
+            : <><span style={{color:"var(--accent)"}}>{I.image}</span><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>Click or drag to upload</div></>
+          }</div>
+        </div>
+      ) : (
+        <div>
+          {/* Pan-to-crop frame */}
+          <div
+            ref={frameRef}
+            className="pan-frame"
+            style={{ width: fm.w, maxWidth: "100%", height: fm.h, borderRadius: isCircle ? "50%" : "var(--radius-sm)" }}
+            onMouseDown={e => { startDrag(e.clientX, e.clientY); e.preventDefault(); }}
+            onMouseMove={e => { if (dragRef.current) onDrag(e.clientX, e.clientY); }}
+            onMouseUp={endDrag}
+            onMouseLeave={endDrag}
+            onTouchStart={e => startDrag(e.touches[0].clientX, e.touches[0].clientY)}
+            onTouchMove={e => { if (dragRef.current) { onDrag(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); } }}
+            onTouchEnd={endDrag}
+          >
+            <img
+              ref={imgRef}
+              src={value}
+              alt=""
+              onLoad={handleImgLoad}
+              style={{ ...getImgStyle(), position: imgLoaded ? "absolute" : "relative", objectFit: imgLoaded ? undefined : "cover", width: imgLoaded ? getImgStyle().width : "100%", height: imgLoaded ? getImgStyle().height : "100%" }}
+              draggable={false}
+            />
+            <div className="pan-size-badge">{fm.label}</div>
+            <div className="pan-hint"><div className="pan-hint-inner">Drag to reposition</div></div>
+          </div>
+
+          {/* Size hint + remove button */}
+          <div className="pan-actions">
+            <label className="btn btn-secondary btn-sm" style={{cursor:"pointer",position:"relative"}}>
+              {I.upload} Replace
+              <input type="file" accept="image/*" onChange={handleFile} style={{position:"absolute",inset:0,opacity:0,cursor:"pointer"}}/>
+            </label>
+            <button className="btn btn-ghost btn-sm" onClick={()=>{ onChange(""); onPanChange && onPanChange({x:50,y:50}); setImgLoaded(false); }} style={{color:"var(--red)"}}>
+              {I.x} Remove
+            </button>
+          </div>
+          <div className="pan-size-hint">{fm.hint}</div>
         </div>
       )}
+
+      {/* Show size hint even before upload */}
+      {!value && <div className="pan-size-hint" style={{marginTop:4}}>{fm.hint}</div>}
       {error && <div style={{fontSize:12,color:"var(--red)",marginTop:6}}>{error}</div>}
     </div>
   );
+}
+
+// Backwards-compatible alias — plain ImageUpload still works for non-image contexts (CSV etc.)
+function ImageUpload({ value, onChange, label, frameRatio = "1:1" }) {
+  const [pan, setPan] = useState({ x: 50, y: 50 });
+  return <ImageUploadWithPan value={value} onChange={onChange} panValue={pan} onPanChange={setPan} label={label} frameRatio={frameRatio}/>;
 }
 
 // --- Drop Form (create + edit, with images) ---
@@ -1148,31 +2044,33 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
   const [pickupDate, setPickupDate] = useState(duplicateFrom ? "" : (src?.pickup_date || ""));
   const [pickupTime, setPickupTime] = useState(src?.pickup_time || "");
   const [pickupLocation, setPickupLocation] = useState(src?.pickup_location || "");
-  const [imageUrl, setImageUrl] = useState(src?.image_url || "");
+  const [imageUrl, setImageUrl] = useState(src?.image_data?.url || src?.image_url || "");
+  const [imagePan, setImagePan] = useState({ x: src?.image_data?.x ?? 50, y: src?.image_data?.y ?? 50 });
   const [items, setItems] = useState(() => {
     if (srcItems?.length) return srcItems.map(i => ({
       id: duplicateFrom ? `dup${i.id}` : i.id,
       existingId: duplicateFrom ? undefined : i.id,
-      name: i.name, price: String(i.price),
+      name: i.name, description: i.description||"", price: String(i.price),
       quantity: i.quantity===-1?"":String(i.quantity),
       unlimited: i.quantity===-1, sortOrder: i.sort_order,
-      imageUrl: i.image_url||""
+      imageUrl: i.image_data?.url || i.image_url||"",
+      imagePan: { x: i.image_data?.x ?? 50, y: i.image_data?.y ?? 50 },
     }));
-    return [{ id: "i0", name: "", price: "", quantity: "", unlimited: false, imageUrl: "" }];
+    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "", imagePan: { x: 50, y: 50 } }];
   });
   const [saving, setSaving] = useState(false);
-  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "" }]);
+  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 } }]);
   const removeItem = (id) => items.length > 1 && setItems(items.filter(i => i.id !== id));
   const updateItem = (id, f, v) => setItems(items.map(i => (i.id === id ? { ...i, [f]: v } : i)));
   const canSave = title && pickupDate && pickupTime && pickupLocation && items.every(i => i.name && i.price) && !saving;
-  const handleSave = async () => { setSaving(true); await onSave({ title, description: desc, pickupDate, pickupTime, pickupLocation, imageUrl }, items); setSaving(false); };
+  const handleSave = async () => { setSaving(true); await onSave({ title, description: desc, pickupDate, pickupTime, pickupLocation, imageUrl, imagePan }, items); setSaving(false); };
 
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="modal-header"><h2>{mode==="edit"?"Edit Drop":duplicateFrom?"Duplicate Drop":"Create New Drop"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Drop Title</label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
-      <ImageUpload value={imageUrl} onChange={setImageUrl} label="Drop Cover Image (optional)"/>
+      <ImageUpload value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Drop Cover Image (optional)" frameRatio="2:1"/>
       <div className="form-row"><div className="form-group"><label className="form-label">Pickup Date</label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div><div className="form-group"><label className="form-label">Pickup Time</label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div></div>
       <div className="form-group"><label className="form-label">Pickup Location</label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
       <div style={{marginBottom:20}}>
@@ -1180,9 +2078,10 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
         {items.map((item,idx)=>(<div key={item.id} style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:16,marginBottom:8}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Item {idx+1}</span>{items.length>1&&<button className="btn btn-ghost btn-sm" onClick={()=>removeItem(item.id)} style={{color:"var(--accent)",padding:4}}>{I.x}</button>}</div>
           <input className="form-input" placeholder="Item name" value={item.name} onChange={e=>updateItem(item.id,"name",e.target.value)} style={{marginBottom:8}}/>
+          <textarea className="form-textarea" placeholder="Description (optional) — ingredients, allergens, serving size..." value={item.description} onChange={e=>updateItem(item.id,"description",e.target.value)} style={{marginBottom:8,minHeight:56,fontSize:13}}/>
           <div className="form-row"><input className="form-input" type="number" placeholder="Price" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>
           <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
-          <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} label="Item Image (optional)"/>
+          <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} panValue={item.imagePan} onPanChange={pan=>updateItem(item.id,"imagePan",pan)} label="Item Image (optional)" frameRatio="1:1"/>
         </div>))}
       </div>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Drop")}</button>
@@ -1234,7 +2133,11 @@ function EditOrderModal({ order, dropItems, existingOrderItems, onSave, onClose 
 
 // --- Customer Form ---
 function CustomerFormModal({ mode, customer, onSave, onClose }) {
-  const [name, setName] = useState(customer?.name||""); const [email, setEmail] = useState(customer?.email||""); const [phone, setPhone] = useState(customer?.phone||""); const [prefer, setPrefer] = useState(customer?.prefer_contact||"email"); const [notes, setNotes] = useState(customer?.notes||"");
+  const [name, setName] = useState(customer?.name||"");
+  const [email, setEmail] = useState(customer?.email||"");
+  const [phone, setPhone] = useState(customer?.phone ? formatPhone(customer.phone) : "");
+  const [prefer, setPrefer] = useState(customer?.prefer_contact||"email");
+  const [notes, setNotes] = useState(customer?.notes||"");
   const [saving, setSaving] = useState(false);
   const canSave = name && email && !saving;
   const handleSave = async () => { setSaving(true); await onSave({ name, email, phone, preferContact: prefer, notes }); setSaving(false); };
@@ -1243,7 +2146,7 @@ function CustomerFormModal({ mode, customer, onSave, onClose }) {
       <div className="modal-header"><h2>{mode==="edit"?"Edit Customer":"Add Customer"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
       <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Full name" value={name} onChange={e=>setName(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="email@example.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
-      <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="555-0100" value={phone} onChange={e=>setPhone(e.target.value)}/></div>
+      <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(555) 555-5555" value={phone} onChange={e=>setPhone(formatPhone(e.target.value))}/></div>
       <div className="form-group"><label className="form-label">Preferred Contact</label><select className="form-select" value={prefer} onChange={e=>setPrefer(e.target.value)}><option value="email">Email</option><option value="sms">SMS / Text</option></select></div>
       <div className="form-group"><label className="form-label">Notes (optional)</label><textarea className="form-textarea" rows={3} placeholder="Allergies, preferences, special requests..." value={notes} onChange={e=>setNotes(e.target.value)}/><div className="form-hint">Only visible to you, not the customer</div></div>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Add Customer")}</button>
@@ -1251,25 +2154,79 @@ function CustomerFormModal({ mode, customer, onSave, onClose }) {
   );
 }
 
-// --- Profile Form ---
+// --- Profile Form — with theme picker + hero image ---
 function ProfileFormModal({ creator, onSave, onClose }) {
-  const [name, setName] = useState(creator?.name||""); const [tagline, setTagline] = useState(creator?.tagline||""); const [slug, setSlug] = useState(creator?.slug||""); const [saving, setSaving] = useState(false);
+  const [name, setName] = useState(creator?.name||"");
+  const [tagline, setTagline] = useState(creator?.tagline||"");
+  const [slug, setSlug] = useState(creator?.slug||"");
+  const [heroImageUrl, setHeroImageUrl] = useState(creator?.hero_image_data?.url || creator?.hero_image_url||"");
+  const [heroPan, setHeroPan] = useState({ x: creator?.hero_image_data?.x ?? 50, y: creator?.hero_image_data?.y ?? 50 });
+  const [themeKey, setThemeKey] = useState(creator?.theme?.key || "terracotta");
+  const [customAccent, setCustomAccent] = useState(creator?.theme?.accent || "#C4572A");
+  const [saving, setSaving] = useState(false);
+
   const cleanSlug = (s) => s.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-  const handleSave = async () => { setSaving(true); await onSave({ name, tagline, slug: cleanSlug(slug) }); setSaving(false); };
+
+  const getThemeData = () => {
+    if (themeKey === "custom") {
+      const accentHover = darkenHex(customAccent);
+      const accentLight = hexToAccentLight(customAccent);
+      return { ...THEMES.custom, key: "custom", accent: customAccent, accentHover, accentLight };
+    }
+    return { ...THEMES[themeKey], key: themeKey };
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave({ name, tagline, slug: cleanSlug(slug), theme: getThemeData(), heroImageUrl, heroPan });
+    setSaving(false);
+  };
+
   const previewUrl = `${window.location.origin}${window.location.pathname}#/${cleanSlug(slug)||"your-business"}`;
+  const previewAccent = themeKey === "custom" ? customAccent : THEMES[themeKey]?.accent;
+
   return (
-    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:600}}>
       <div className="modal-header"><h2>Edit Profile</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+
       <div className="form-group"><label className="form-label">Business Name</label><input className="form-input" placeholder="Your business name" value={name} onChange={e=>setName(e.target.value)}/><div className="form-hint">Appears at the top of your customer page</div></div>
       <div className="form-group"><label className="form-label">Tagline</label><input className="form-input" placeholder="Fresh food, made with love" value={tagline} onChange={e=>setTagline(e.target.value)}/></div>
-      <div className="form-group"><label className="form-label">Page URL Slug</label><input className="form-input" placeholder="my-kitchen" value={slug} onChange={e=>setSlug(e.target.value)}/><div className="form-hint">Letters, numbers, and dashes only. This becomes your page URL.</div></div>
-      <div style={{padding:16,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",marginBottom:20}}>
-        <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Preview</div>
-        <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:700}}>{name||"Your Business"}</div>
-        <div style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{tagline||"Your tagline here"}</div>
-        <div style={{fontSize:12,color:"var(--accent)",marginTop:8,wordBreak:"break-all"}}>{previewUrl}</div>
+      <div className="form-group"><label className="form-label">Page URL Slug</label><input className="form-input" placeholder="my-kitchen" value={slug} onChange={e=>setSlug(e.target.value)}/><div className="form-hint">Letters, numbers, and dashes only.</div></div>
+
+      {/* Hero Image */}
+      <ImageUpload value={heroImageUrl} onChange={setHeroImageUrl} panValue={heroPan} onPanChange={setHeroPan} label="Storefront Hero Image (optional)" frameRatio="3:1"/>
+
+      {/* Theme Picker */}
+      <div className="form-group">
+        <label className="form-label">{I.palette} Storefront Theme</label>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
+          {Object.entries(THEMES).map(([key, t]) => (
+            <div key={key} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,cursor:"pointer"}} onClick={()=>setThemeKey(key)}>
+              <div className={`theme-swatch ${themeKey===key?"selected":""}`} style={{background: key==="custom" ? "conic-gradient(red,orange,yellow,green,blue,violet,red)" : t.accent}}/>
+              <span style={{fontSize:11,fontWeight:600,color:themeKey===key?"var(--text)":"var(--text-tertiary)"}}>{t.name}</span>
+            </div>
+          ))}
+        </div>
+        {themeKey === "custom" && (
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:12,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)"}}>
+            <label className="form-label" style={{margin:0,whiteSpace:"nowrap"}}>Accent Color</label>
+            <input type="color" value={customAccent} onChange={e=>setCustomAccent(e.target.value)} style={{width:48,height:36,border:"1px solid var(--border)",borderRadius:6,cursor:"pointer",padding:2}}/>
+            <span style={{fontSize:13,color:"var(--text-secondary)"}}>{customAccent}</span>
+          </div>
+        )}
+        {/* Live preview bar */}
+        <div className="theme-preview-bar" style={{background:previewAccent, marginTop:12}}/>
       </div>
-      <button className="btn btn-primary btn-full" disabled={!name||!slug||saving} onClick={handleSave}>{saving?"Saving...":"Save Profile"}</button>
+
+      {/* Preview */}
+      <div style={{padding:16,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",marginBottom:20,borderLeft:`4px solid ${previewAccent}`}}>
+        <div style={{fontSize:12,fontWeight:600,color:"var(--text-tertiary)",textTransform:"uppercase",letterSpacing:.3,marginBottom:8}}>Preview</div>
+        <div style={{fontFamily:"var(--font-display)",fontSize:22,fontWeight:700}}>{name||"Your Business"}</div>
+        <div style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{tagline||"Your tagline here"}</div>
+        <div style={{fontSize:12,color:previewAccent,marginTop:8,wordBreak:"break-all"}}>{previewUrl}</div>
+      </div>
+
+      <button className="btn btn-primary btn-full" disabled={!name||!slug||saving} onClick={handleSave} style={{background:previewAccent}}>{saving?"Saving...":"Save Profile"}</button>
     </div></div>
   );
 }
@@ -1366,7 +2323,7 @@ function Lightbox({ src, onClose }) {
 }
 
 // ============================================================
-// CUSTOMER STOREFRONT (unchanged except image support)
+// CUSTOMER STOREFRONT
 // ============================================================
 function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData, customers }) {
   const [selectedDrop, setSelectedDrop] = useState(null);
@@ -1374,16 +2331,19 @@ function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData,
   const [showSignup, setShowSignup] = useState(false);
   const active = drops.filter(d=>d.status==="active"&&!d.archived);
 
+  // Apply creator's theme on mount
+  useEffect(() => {
+    if (creator?.theme) applyTheme(creator.theme);
+  }, [creator?.theme]);
+
   if (orderConfirmation) return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter"><OrderConfirmation order={orderConfirmation} creator={creator} onBack={()=>{setOrderConfirmation(null);setSelectedDrop(null)}}/></div></>);
   if (selectedDrop) return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter"><DropOrderPage drop={selectedDrop} items={getDropItems(selectedDrop.id)} creator={creator} customers={customers} onBack={()=>setSelectedDrop(null)} onOrderPlaced={order=>{setOrderConfirmation(order);loadData()}} showToast={showToast}/></div></>);
 
   return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter">
     {active.length===0?(<div className="empty-state" style={{marginTop:40}}><div className="empty-state-icon">{I.drop}</div><h3>No active drops right now</h3><p style={{marginTop:8}}>Check back soon!</p></div>):(<>
       <h2 style={{marginBottom:20}}>Available Drops</h2>
-      <div style={{display:"grid",gap:20}}>{active.map(drop=>{const dI=getDropItems(drop.id);const bannerStyle=drop.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)),url(${drop.image_url})`,backgroundSize:"cover",backgroundPosition:"center"}:{};return(<div key={drop.id} className="cust-drop-card" onClick={()=>setSelectedDrop(drop)}><div className="cust-drop-banner" style={bannerStyle}><h2>{drop.title}</h2>{drop.description&&<p style={{fontSize:14,marginTop:6,opacity:.9}}>{drop.description}</p>}</div><div className="cust-drop-body"><div className="cust-drop-detail">{I.clock} <span>{fmtDateLong(drop.pickup_date)}, {drop.pickup_time}</span></div><div className="cust-drop-detail">{I.pin} <span>{drop.pickup_location}</span></div><div className="cust-drop-detail">{I.dollar} <span>Cash at pickup</span></div><div className="cust-drop-items-peek"><span>{dI.length} item{dI.length!==1?"s":""}: {dI.map(i=>i.name).join(", ")}</span></div><div style={{marginTop:16}}><span className="btn btn-primary btn-full">View Menu & Order →</span></div></div></div>)})}</div>
+      <div style={{display:"grid",gap:20}}>{active.map(drop=>{const dI=getDropItems(drop.id);const dropPos=drop.image_data?`${drop.image_data.x}% ${drop.image_data.y}%`:"50% 50%";const bannerStyle=drop.image_url?{backgroundImage:`linear-gradient(rgba(0,0,0,.55),rgba(0,0,0,.55)),url(${drop.image_url})`,backgroundSize:"cover",backgroundPosition:dropPos}:{};return(<div key={drop.id} className="cust-drop-card" onClick={()=>setSelectedDrop(drop)}><div className="cust-drop-banner" style={bannerStyle}><h2>{drop.title}</h2>{drop.description&&<p style={{fontSize:14,marginTop:6,opacity:.9}}>{drop.description}</p>}</div><div className="cust-drop-body"><div className="cust-drop-detail">{I.clock} <span>{fmtDateLong(drop.pickup_date)}, {drop.pickup_time}</span></div><div className="cust-drop-detail">{I.pin} <span>{drop.pickup_location}</span></div><div className="cust-drop-detail">{I.dollar} <span>Cash at pickup</span></div><div className="cust-drop-items-peek"><span>{dI.length} item{dI.length!==1?"s":""}: {dI.map(i=>i.name).join(", ")}</span></div><div style={{marginTop:16}}><span className="btn btn-primary btn-full">View Menu & Order →</span></div></div></div>)})}</div>
     </>)}
-
-    {/* Signup form — always visible */}
     <div className="signup-section">
       {!showSignup ? (
         <div style={{textAlign:"center"}}>
@@ -1399,7 +2359,19 @@ function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData,
 }
 
 function CustomerHeader({ creator }) {
-  return <div className="cust-header"><div className="cust-header-name">{creator?.name||"FoodDrop"}</div><div className="cust-header-tagline">{creator?.tagline||"Fresh food, made with love"}</div></div>;
+  const hasHero = !!creator?.hero_image_url;
+  const heroPan = creator?.hero_image_data;
+  const heroPos = heroPan ? `${heroPan.x}% ${heroPan.y}%` : "50% 50%";
+  return (
+    <div className={`cust-header ${hasHero ? "has-hero" : ""}`}>
+      {hasHero && <img src={creator.hero_image_url} alt="" className="cust-header-hero" style={{objectPosition: heroPos}}/>}
+      {hasHero && <div className="cust-header-overlay"/>}
+      <div className="cust-header-content">
+        <div className="cust-header-name">{creator?.name||"FoodDrop"}</div>
+        <div className="cust-header-tagline">{creator?.tagline||"Fresh food, made with love"}</div>
+      </div>
+    </div>
+  );
 }
 
 function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced, showToast }) {
@@ -1444,6 +2416,14 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
       });
     } catch (emailErr) { console.error("Email send failed:", emailErr); }
 
+    // Send welcome email — only if this is their first order (new customer)
+    // existing is defined above: null if they were just created, truthy if pre-existing
+    if (!existing && customerId) {
+      // Mark welcome_sent so it never fires twice
+      await supabase.from("customers").update({ welcome_sent: true }).eq("id", customerId).execute();
+      sendWelcomeEmail({ creator, customerName: name, customerEmail: email });
+    }
+
     setPlacing(false);onOrderPlaced(orderDetail);
   };
 
@@ -1457,7 +2437,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
 
     {step==="menu"&&(<>
       <h3 style={{marginBottom:4}}>Menu</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16}}>Select what you'd like to order</p>
-      <div className="card">{items.map(item=>{const avail=item.quantity>0?item.quantity-item.claimed:-1;const sold=item.quantity>0&&avail<=0;return(<div key={item.id} className="oi-row" style={{opacity:sold?.5:1}}><div className="oi-info" style={{display:"flex",gap:12,alignItems:"center"}}>{item.image_url&&<img src={item.image_url} alt="" onClick={e=>{e.stopPropagation();setLightboxImg(item.image_url)}} style={{width:56,height:56,borderRadius:8,objectFit:"cover",flexShrink:0,cursor:"pointer",transition:"transform .15s"}} onMouseOver={e=>e.target.style.transform="scale(1.05)"} onMouseOut={e=>e.target.style.transform="scale(1)"}/>}<div><div className="oi-name">{item.name}</div><div className="oi-price">{fmt(item.price)}</div><div className="oi-avail">{sold?"Sold out":item.quantity>0?`${avail} left`:"Available"}</div></div></div>{!sold&&<div className="qty-ctrl"><button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!cart[item.id]}>−</button><span className="qty-val">{cart[item.id]||0}</span><button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button></div>}</div>)})}</div>
+      <div className="card">{items.map(item=>{const avail=item.quantity>0?item.quantity-item.claimed:-1;const sold=item.quantity>0&&avail<=0;const itemPos=item.image_data?`${item.image_data.x}% ${item.image_data.y}%`:"50% 50%";return(<div key={item.id} className="oi-row" style={{opacity:sold?.5:1}}><div className="oi-info" style={{display:"flex",gap:12,alignItems:"center"}}>{item.image_url&&<img src={item.image_url} alt="" onClick={e=>{e.stopPropagation();setLightboxImg(item.image_url)}} style={{width:56,height:56,borderRadius:8,objectFit:"cover",objectPosition:itemPos,flexShrink:0,cursor:"pointer",transition:"transform .15s"}} onMouseOver={e=>e.target.style.transform="scale(1.05)"} onMouseOut={e=>e.target.style.transform="scale(1)"}/>}<div><div className="oi-name">{item.name}</div><div className="oi-price">{fmt(item.price)}</div>{item.description&&<div className="oi-desc">{item.description}</div>}<div className="oi-avail">{sold?"Sold out":item.quantity>0?`${avail} left`:"Available"}</div></div></div>{!sold&&<div className="qty-ctrl"><button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!cart[item.id]}>−</button><span className="qty-val">{cart[item.id]||0}</span><button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button></div>}</div>)})}</div>
       {cartCount>0&&<div style={{position:"sticky",bottom:16,marginTop:24}}><button className="btn btn-primary btn-full" onClick={()=>setStep("checkout")} style={{padding:"14px 24px",fontSize:16,boxShadow:"var(--shadow-lg)"}}>Continue — {cartCount} item{cartCount!==1?"s":""}, {fmt(cartTotal)}</button></div>}
       <Lightbox src={lightboxImg} onClose={()=>setLightboxImg(null)}/>
     </>)}
@@ -1473,7 +2453,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
         <h3 style={{marginBottom:16}}>Your Information</h3>
         <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Your full name" value={name} onChange={e=>setName(e.target.value)}/></div>
         <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)}/><div className="form-hint">We'll send your order confirmation here</div></div>
-        <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="555-0100" value={phone} onChange={e=>setPhone(e.target.value)}/></div>
+        <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(555) 555-5555" value={phone} onChange={e=>setPhone(formatPhone(e.target.value))}/></div>
         <div className="form-group"><label className="form-label">How should we reach you about future drops?</label><div style={{display:"flex",gap:20}}><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="email"} onChange={()=>setPreferContact("email")}/>{I.mail} Email</label><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="sms"} onChange={()=>setPreferContact("sms")}/>{I.phone} Text / SMS</label></div></div>
       </div>
       <button className="btn btn-primary btn-full" style={{marginTop:20,padding:"14px 24px",fontSize:16}} disabled={!name||!email||placing} onClick={handlePlaceOrder}>{placing?"Placing order...":`Confirm Order — ${fmt(cartTotal)}`}</button>
@@ -1517,11 +2497,15 @@ function CustomerSignupForm({ creator, customers, showToast, loadData, onDone })
     try {
       const existing = customers.find(c => c.email.toLowerCase() === email.toLowerCase());
       if (existing) {
+        // Existing customer updating their prefs — no welcome email
         const { error } = await supabase.from("customers").update({ name, phone, prefer_contact: preferContact, opted_in: true }).eq("id", existing.id).execute();
         if (error) { console.error("Signup update error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
       } else if (creator) {
-        const { error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "" }).execute();
+        // Brand new customer — insert, then send welcome email
+        const { data: nc, error } = await supabase.from("customers").insert({ creator_id: creator.id, name, email, phone: phone || "", prefer_contact: preferContact, opted_in: true, notes: "", welcome_sent: true }).select("*").single().execute();
         if (error) { console.error("Signup insert error:", error); showToast("Something went wrong. Please try again.", "error"); setSaving(false); return; }
+        // Fire welcome email non-blocking
+        if (nc) sendWelcomeEmail({ creator, customerName: name, customerEmail: email });
       }
       setSaving(false); setDone(true); loadData();
     } catch (e) { console.error("Signup exception:", e); showToast("Something went wrong.", "error"); setSaving(false); }
@@ -1542,7 +2526,7 @@ function CustomerSignupForm({ creator, customers, showToast, loadData, onDone })
       <p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:20}}>Get notified about upcoming drops from {creator?.name || "us"}.</p>
       <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Your full name" value={name} onChange={e=>setName(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
-      <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="555-0100" value={phone} onChange={e=>setPhone(e.target.value)}/></div>
+      <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(555) 555-5555" value={phone} onChange={e=>setPhone(formatPhone(e.target.value))}/></div>
       <div className="form-group"><label className="form-label">How should we reach you?</label><div style={{display:"flex",gap:20}}><label className="checkbox-row"><input type="radio" name="signup-prefer" checked={preferContact==="email"} onChange={()=>setPreferContact("email")}/>{I.mail} Email</label><label className="checkbox-row"><input type="radio" name="signup-prefer" checked={preferContact==="sms"} onChange={()=>setPreferContact("sms")}/>{I.phone} Text</label></div></div>
       <label className="checkbox-row" style={{marginBottom:20,padding:12,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)"}}><input type="checkbox" checked={optedIn} onChange={e=>setOptedIn(e.target.checked)}/><span style={{fontSize:13}}>I agree to receive notifications about upcoming drops via {preferContact === "sms" ? "text message" : "email"}.</span></label>
       <button className="btn btn-primary btn-full" disabled={!name||!email||!optedIn||saving} onClick={handleSubmit}>{saving ? "Joining..." : "Sign Me Up"}</button>
