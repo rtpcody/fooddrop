@@ -458,8 +458,12 @@ const handleLogin = async (email, password) => {
     );
   }
 
-  // Creator not found
+// Creator not found — but if we have a session, this might just be a loadData race
+  // (e.g. right after login redirect). Show spinner instead of "not found" in that case.
   if (slug && !creator) {
+    if (session?.access_token) {
+      return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading...</span></div></div></>;
+    }
     return (
       <><style>{CSS}</style><div className="app">
         <div className="loading-screen" style={{color:"var(--text)"}}>
