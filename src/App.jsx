@@ -2689,7 +2689,8 @@ function CustomerHeader({ creator }) {
   );
 }
 
-const [cart, setCart] = useState({});
+function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced, showToast }) {
+  const [cart, setCart] = useState({});
   const [step, setStep] = useState("menu");
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [phone, setPhone] = useState(""); const [preferContact, setPreferContact] = useState("email");
   const [placing, setPlacing] = useState(false);
