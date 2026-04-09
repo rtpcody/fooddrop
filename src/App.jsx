@@ -665,6 +665,55 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     }
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
+  const [showBlast, setShowBlast] = useState(null); // drop object
+
+  const handleSendBlast = async ({ drop, channel, audience, customNote }) => {
+    const dropItemsList = getDropItems(drop.id);
+    // Build customer list based on audience selection
+    let targetCustomers;
+    if (audience === "ordered") {
+      const orderedEmails = getDropOrders(drop.id)
+        .filter(o => o.status !== "cancelled")
+        .map(o => o.customer_email?.toLowerCase().trim())
+        .filter(Boolean);
+      targetCustomers = customers.filter(c =>
+        c.opted_in && orderedEmails.includes(c.email?.toLowerCase().trim())
+      );
+    } else {
+      targetCustomers = customers.filter(c => c.opted_in);
+    }
+
+    if (!targetCustomers.length) {
+      showToast("No opted-in customers to send to.", "error"); return;
+    }
+
+    if (channel === "sms") {
+      showToast("SMS blasts coming soon! 📱"); return;
+    }
+
+    try {
+      const res = await fetch("/api/send-blast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          creator,
+          drop,
+          items: dropItemsList,
+          customers: targetCustomers,
+          channel,
+          customNote: customNote || "",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`📣 Blast sent to ${data.sent} customer${data.sent !== 1 ? "s" : ""}!`);
+      } else {
+        showToast("Blast failed. Check your email setup.", "error");
+      }
+    } catch {
+      showToast("Blast failed — network error.", "error");
+    }
+  };
   const handleEditProfile = async (d) => {
     if (!creator) return;
     await supabase.from("creators").update({
@@ -776,7 +825,7 @@ const handleDeleteDropPermanently = async (dropId) => {
       {showEditOrder && <EditOrderModal order={showEditOrder.order} dropItems={getDropItems(showEditOrder.dropId)} existingOrderItems={getOrderItems(showEditOrder.order.id)} onSave={(items)=>handleEditOrder(showEditOrder.order.id,items,showEditOrder.dropId)} onClose={()=>setShowEditOrder(null)}/>}
       {showImportCSV && <ImportCSVModal onImport={handleImportCustomers} onClose={()=>setShowImportCSV(false)}/>}
       {showBulkDelete && <BulkDeleteCustomersModal count={showBulkDelete.length} onConfirm={(deleteOrders)=>{handleBulkDeleteCustomers(showBulkDelete,deleteOrders);setShowBulkDelete(null);}} onClose={()=>setShowBulkDelete(null)}/>}
-      {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>{handleDeleteDropPermanently(showDeleteDrop.id);setShowDeleteDrop(null);}} onClose={()=>setShowDeleteDrop(null)}/>}
+      {showBlast && <BlastModal drop={showBlast} customers={customers} getDropOrders={getDropOrders} onSend={handleSendBlast} onClose={()=>setShowBlast(null)}/>}
     </>
   );
 }
@@ -1423,7 +1472,7 @@ function CustomerSummary({ drops, orders, customers, getOrderItems, preset, setP
 // ============================================================
 // DROPS TAB — with archive toggle
 // ============================================================
-function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive, onDuplicate, onDeletePermanently }) {
+function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive, onDuplicate, onDeletePermanently, onAnnounce }) {
   const [showArchived, setShowArchived] = useState(false);
   const visible = showArchived ? drops : drops.filter(d => !d.archived);
   const archivedCount = drops.filter(d => d.archived).length;
@@ -1437,7 +1486,7 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
       </div>
     </div>
     {visible.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.drop}</div><h3>No drops yet</h3><p style={{marginTop:8}}>Create your first drop to start taking orders.</p></div>):(
-      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button><button className="btn btn-danger btn-sm" onClick={e=>{e.stopPropagation();onDeletePermanently(drop)}}>{I.trash} Delete</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
+      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button><button className="btn btn-danger btn-sm" onClick={e=>{e.stopPropagation();onDeletePermanently(drop)}}>{I.trash} Delete</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>{drop.status==="active"&&<button className="btn btn-primary btn-sm" onClick={e=>{e.stopPropagation();onAnnounce(drop)}} title="Announce this drop">📣 Announce</button>}<button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
     )}
   </>);
 }
@@ -1986,7 +2035,125 @@ function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
     </div></div>
   );
 }
+function BlastModal({ drop, customers, getDropOrders, onSend, onClose }) {
+  const [channel, setChannel] = useState("email");
+  const [audience, setAudience] = useState("all");
+  const [customNote, setCustomNote] = useState("");
+  const [sending, setSending] = useState(false);
 
+  const optedIn = customers.filter(c => c.opted_in);
+  const orderedCustomerEmails = getDropOrders(drop.id)
+    .filter(o => o.status !== "cancelled")
+    .map(o => o.customer_email?.toLowerCase().trim())
+    .filter(Boolean);
+  const orderedOptedIn = optedIn.filter(c => orderedCustomerEmails.includes(c.email?.toLowerCase().trim()));
+  const targetCount = audience === "all" ? optedIn.length : orderedOptedIn.length;
+
+  const handleSend = async () => {
+    setSending(true);
+    await onSend({ drop, channel, audience, customNote });
+    setSending(false);
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{maxWidth:520}} onClick={e=>e.stopPropagation()}>
+        <div className="modal-header">
+          <h2 style={{margin:0}}>📣 Announce Drop</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div style={{padding:"0 24px 24px"}}>
+
+          {/* Drop summary */}
+          <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"12px 16px",marginBottom:20}}>
+            <p style={{margin:0,fontWeight:600,fontSize:15}}>{drop.title}</p>
+            <p style={{margin:"4px 0 0",fontSize:13,color:"var(--text-secondary)"}}>
+              {drop.pickup_date ? new Date(drop.pickup_date + "T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) : ""}{drop.pickup_time ? " · " + drop.pickup_time : ""}
+            </p>
+          </div>
+
+          {/* Channel selector */}
+          <div style={{marginBottom:20}}>
+            <p style={{margin:"0 0 10px",fontWeight:600,fontSize:14}}>Send via</p>
+            <div style={{display:"flex",gap:10}}>
+              <button
+                onClick={()=>setChannel("email")}
+                style={{flex:1,padding:"10px 16px",borderRadius:"var(--radius-sm)",border:`2px solid ${channel==="email"?"var(--accent)":"var(--border)"}`,background:channel==="email"?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:14,cursor:"pointer",color:channel==="email"?"var(--accent)":"var(--text-secondary)"}}>
+                ✉️ Email
+              </button>
+              <button
+                onClick={()=>setChannel("sms")}
+                style={{flex:1,padding:"10px 16px",borderRadius:"var(--radius-sm)",border:`2px solid ${channel==="sms"?"var(--accent)":"var(--border)"}`,background:channel==="sms"?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:14,cursor:"pointer",color:channel==="sms"?"var(--accent)":"var(--text-secondary)",position:"relative"}}>
+                💬 Text
+                <span style={{position:"absolute",top:-8,right:-8,background:"var(--gold)",color:"#fff",fontSize:9,fontWeight:700,padding:"2px 6px",borderRadius:10,letterSpacing:.5}}>SOON</span>
+              </button>
+            </div>
+            {channel==="sms"&&<p style={{margin:"8px 0 0",fontSize:12,color:"var(--text-tertiary)"}}>SMS blasts are coming soon. Set up your message now and send when it's ready.</p>}
+          </div>
+
+          {/* Audience selector */}
+          <div style={{marginBottom:20}}>
+            <p style={{margin:"0 0 10px",fontWeight:600,fontSize:14}}>Send to</p>
+            <div style={{display:"flex",gap:10}}>
+              <button
+                onClick={()=>setAudience("all")}
+                style={{flex:1,padding:"10px 16px",borderRadius:"var(--radius-sm)",border:`2px solid ${audience==="all"?"var(--accent)":"var(--border)"}`,background:audience==="all"?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:14,cursor:"pointer",color:audience==="all"?"var(--accent)":"var(--text-secondary)"}}>
+                All opted-in
+                <span style={{display:"block",fontSize:12,fontWeight:400,color:"var(--text-tertiary)",marginTop:2}}>{optedIn.length} customer{optedIn.length!==1?"s":""}</span>
+              </button>
+              <button
+                onClick={()=>setAudience("ordered")}
+                style={{flex:1,padding:"10px 16px",borderRadius:"var(--radius-sm)",border:`2px solid ${audience==="ordered"?"var(--accent)":"var(--border)"}`,background:audience==="ordered"?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:14,cursor:"pointer",color:audience==="ordered"?"var(--accent)":"var(--text-secondary)"}}>
+                Ordered this drop
+                <span style={{display:"block",fontSize:12,fontWeight:400,color:"var(--text-tertiary)",marginTop:2}}>{orderedOptedIn.length} customer{orderedOptedIn.length!==1?"s":""}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Custom note */}
+          <div style={{marginBottom:24}}>
+            <label style={{display:"block",fontWeight:600,fontSize:14,marginBottom:8}}>
+              Personal note <span style={{fontWeight:400,color:"var(--text-tertiary)"}}>(optional)</span>
+            </label>
+            <textarea
+              className="form-input"
+              rows={3}
+              placeholder={`Add a personal message to your customers. E.g. "So excited to share this week's menu with you — it's been a long time coming!"`}
+              value={customNote}
+              onChange={e=>setCustomNote(e.target.value)}
+              style={{resize:"vertical",fontFamily:"inherit"}}
+            />
+            <p style={{margin:"6px 0 0",fontSize:12,color:"var(--text-tertiary)"}}>This appears at the top of the email above the drop details.</p>
+          </div>
+
+          {/* Preview note */}
+          <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"10px 14px",marginBottom:20,fontSize:13,color:"var(--text-secondary)"}}>
+            📧 The email will include your drop image, items, pickup details, and a direct link to your storefront — all branded as <strong>{drop.title}</strong>.
+          </div>
+
+          {targetCount === 0 && (
+            <div style={{background:"var(--red-light)",color:"var(--red)",borderRadius:"var(--radius-sm)",padding:"10px 14px",marginBottom:16,fontSize:13}}>
+              No opted-in customers in this audience. Ask customers to opt in first.
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:12}}>
+            <button className="btn btn-ghost" style={{flex:1}} onClick={onClose}>Cancel</button>
+            <button
+              className="btn btn-primary"
+              style={{flex:2}}
+              disabled={sending || targetCount===0 || channel==="sms"}
+              onClick={handleSend}>
+              {sending ? "Sending..." : `Send to ${targetCount} customer${targetCount!==1?"s":""}`}
+            </button>
+          </div>
+          {channel==="sms"&&<p style={{margin:"10px 0 0",textAlign:"center",fontSize:12,color:"var(--text-tertiary)"}}>SMS sending will be enabled in a future update.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
 function PermanentDeleteDropModal({ drop, onConfirm, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
