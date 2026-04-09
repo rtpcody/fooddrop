@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v21 — manual updates from Claude,
+// FOODDROP MVP v22 — manual updates from Claude,
 //                    fix cancelled orders in revenue calculations,
 //                    customer merge tool, signup_source tracking
 // ============================================================
