@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v22 — manual updates from Claude,
+// FOODDROP MVP v23 — manual updates from Claude,
 //                    fix cancelled orders in revenue calculations,
 //                    customer merge tool, signup_source tracking
 // ============================================================
@@ -2689,12 +2689,31 @@ function CustomerHeader({ creator }) {
   );
 }
 
-function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced, showToast }) {
-  const [cart, setCart] = useState({});
+const [cart, setCart] = useState({});
   const [step, setStep] = useState("menu");
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [phone, setPhone] = useState(""); const [preferContact, setPreferContact] = useState("email");
   const [placing, setPlacing] = useState(false);
   const [lightboxImg, setLightboxImg] = useState(null);
+  const [emailStep, setEmailStep] = useState("entry"); // "entry" | "recognized" | "new"
+  const [lookingUp, setLookingUp] = useState(false);
+  const [returningCustomer, setReturningCustomer] = useState(null);
+
+  const handleEmailContinue = async () => {
+    if (!email) return;
+    setLookingUp(true);
+    const normalized = email.toLowerCase().trim();
+    const found = customers.find(c => c.email.toLowerCase().trim() === normalized);
+    if (found) {
+      setReturningCustomer(found);
+      setName(found.name || "");
+      setPhone(found.phone || "");
+      setPreferContact(found.prefer_contact || "email");
+      setEmailStep("recognized");
+    } else {
+      setEmailStep("new");
+    }
+    setLookingUp(false);
+  };
 
   const updateCart = (itemId, delta, item) => { setCart(prev => { const curr=prev[itemId]||0; const next=Math.max(0,curr+delta); const max=item.quantity>0?item.quantity-item.claimed:999; if(next>max) return prev; return{...prev,[itemId]:next}; }); };
   const cartCount = Object.values(cart).reduce((s,q)=>s+q,0);
@@ -2740,6 +2759,24 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
       });
     } catch (emailErr) { console.error("Email send failed:", emailErr); }
 
+// Notify creator of new order (non-blocking)
+    try {
+      if (creator?.email) {
+        fetch("/api/notify-creator", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            creatorEmail: creator.email,
+            creatorName: creator.name,
+            customerName: name,
+            dropTitle: drop.title,
+            items: orderDetail.items,
+            total: cartTotal,
+          }),
+        });
+      }
+    } catch (notifyErr) { console.error("Creator notify failed:", notifyErr); }
+          
     // Send welcome email — only for brand new customers
     if (!existing && customerId) {
       await supabase.from("customers").update({ welcome_sent: true }).eq("id", customerId).execute();
@@ -2771,14 +2808,57 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
         <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0 0",fontFamily:"var(--font-display)",fontSize:20,fontWeight:600}}><span>Total</span><span>{fmt(cartTotal)}</span></div>
         <div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:4}}>💵 Pay cash at pickup</div>
       </div>
-      <div className="card">
+<div className="card">
         <h3 style={{marginBottom:16}}>Your Information</h3>
-        <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Your full name" value={name} onChange={e=>setName(e.target.value)}/></div>
-        <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)}/><div className="form-hint">We'll send your order confirmation here</div></div>
-        <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(555) 555-5555" value={phone} onChange={e=>setPhone(formatPhone(e.target.value))}/></div>
-        <div className="form-group"><label className="form-label">How should we reach you about future drops?</label><div style={{display:"flex",gap:20}}><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="email"} onChange={()=>setPreferContact("email")}/>{I.mail} Email</label><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="sms"} onChange={()=>setPreferContact("sms")}/>{I.phone} Text / SMS</label></div></div>
+
+        {/* Step 1 — Email entry */}
+        <div className="form-group">
+          <label className="form-label">Email</label>
+          <div style={{display:"flex",gap:8}}>
+            <input
+              className="form-input"
+              type="email"
+              placeholder="your@email.com"
+              value={email}
+              onChange={e=>{setEmail(e.target.value);setEmailStep("entry");setReturningCustomer(null);setName("");setPhone("");}}
+              disabled={emailStep!=="entry"}
+              style={{flex:1}}
+            />
+            {emailStep==="entry"&&(
+              <button
+                className="btn btn-secondary"
+                onClick={handleEmailContinue}
+                disabled={!email||lookingUp}
+                style={{whiteSpace:"nowrap"}}>
+                {lookingUp?"...":"Continue →"}
+              </button>
+            )}
+            {emailStep!=="entry"&&(
+              <button className="btn btn-ghost" onClick={()=>{setEmailStep("entry");setReturningCustomer(null);setName("");setPhone("");}}>Edit</button>
+            )}
+          </div>
+          {emailStep==="entry"&&<div className="form-hint">We'll send your order confirmation here</div>}
+        </div>
+
+        {/* Recognized returning customer */}
+        {emailStep==="recognized"&&returningCustomer&&(
+          <div style={{background:"var(--green-light)",border:"1px solid var(--green)",borderRadius:"var(--radius-sm)",padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>👋</span>
+            <div>
+              <p style={{margin:0,fontWeight:600,color:"var(--green)",fontSize:14}}>Welcome back, {returningCustomer.name.split(" ")[0]}!</p>
+              <p style={{margin:"2px 0 0",fontSize:13,color:"var(--text-secondary)"}}>We've filled in your details below.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Name + phone — shown after email step */}
+        {emailStep!=="entry"&&(<>
+          <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Your full name" value={name} onChange={e=>setName(e.target.value)}/></div>
+          <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(555) 555-5555" value={phone} onChange={e=>setPhone(formatPhone(e.target.value))}/></div>
+          <div className="form-group"><label className="form-label">How should we reach you about future drops?</label><div style={{display:"flex",gap:20}}><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="email"} onChange={()=>setPreferContact("email")}/>{I.mail} Email</label><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="sms"} onChange={()=>setPreferContact("sms")}/>{I.phone} Text / SMS</label></div></div>
+        </>)}
       </div>
-      <button className="btn btn-primary btn-full" style={{marginTop:20,padding:"14px 24px",fontSize:16}} disabled={!name||!email||placing} onClick={handlePlaceOrder}>{placing?"Placing order...":`Confirm Order — ${fmt(cartTotal)}`}</button>
+      <button className="btn btn-primary btn-full" style={{marginTop:20,padding:"14px 24px",fontSize:16}} disabled={!name||!email||emailStep==="entry"||placing} onClick={handlePlaceOrder}>{placing?"Placing order...":`Confirm Order — ${fmt(cartTotal)}`}</button>
     </>)}
   </>);
 }
