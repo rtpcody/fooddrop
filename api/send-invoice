@@ -1,0 +1,72 @@
+// api/send-invoice.js
+// Sends an order confirmation + invoice email to a customer for a manually created order.
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  const { creatorName, customerName, customerEmail, dropTitle, pickupDate, pickupTime, pickupLocation, items, total } = req.body;
+  if (!customerEmail || !customerName) return res.status(400).json({ error: "Missing fields" });
+
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  if (!RESEND_API_KEY) return res.status(500).json({ error: "Missing RESEND_API_KEY" });
+
+  const itemRows = (items || [])
+    .map(i => `<tr><td style="padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:15px;color:#1a1a1a;">${i.qty}× ${i.name}</td><td style="padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:15px;color:#555;text-align:right;">$${Number(i.price * i.qty).toFixed(2)}</td></tr>`)
+    .join("");
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f9f6f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <div style="max-width:560px;margin:32px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+    <div style="background:#c8956c;padding:24px 32px;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:rgba(255,255,255,.75);text-transform:uppercase;letter-spacing:1px;">Order Invoice</p>
+      <h1 style="margin:0;font-size:24px;font-weight:700;color:#fff;">Your order is confirmed</h1>
+    </div>
+    <div style="padding:28px 32px 24px;">
+      <p style="margin:0 0 20px;font-size:15px;color:#555;">Hi <strong style="color:#1a1a1a;">${customerName.split(" ")[0]}</strong>, here's a summary of your order from <strong style="color:#1a1a1a;">${creatorName}</strong>.</p>
+
+      <div style="background:#f9f6f2;border-radius:8px;padding:14px 18px;margin-bottom:24px;">
+        <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.5px;">Pickup Details</p>
+        <p style="margin:0;font-size:15px;color:#1a1a1a;font-weight:600;">${pickupDate}${pickupTime ? " · " + pickupTime : ""}</p>
+        ${pickupLocation ? `<p style="margin:4px 0 0;font-size:14px;color:#555;">${pickupLocation}</p>` : ""}
+      </div>
+
+      <p style="margin:0 0 10px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.5px;">Order Summary</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">${itemRows}</table>
+      <div style="display:flex;justify-content:space-between;padding:12px 0;border-top:2px solid #1a1a1a;margin-bottom:24px;">
+        <span style="font-size:17px;font-weight:700;color:#1a1a1a;">Total Due</span>
+        <span style="font-size:17px;font-weight:700;color:#1a1a1a;">$${Number(total).toFixed(2)}</span>
+      </div>
+
+      <div style="background:#fdf8f4;border:1px solid #f0dca0;border-radius:8px;padding:14px 18px;">
+        <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#b8860b;">💳 Payment</p>
+        <p style="margin:0;font-size:14px;color:#555;">Please bring <strong>$${Number(total).toFixed(2)}</strong> to pickup. Your creator will let you know if other payment options are available.</p>
+      </div>
+    </div>
+    <div style="padding:16px 32px 24px;border-top:1px solid #f0f0f0;text-align:center;">
+      <p style="margin:0;font-size:12px;color:#aaa;">This order was created by <strong>${creatorName}</strong> on your behalf.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: `${creatorName} <orders@getfooddrop.com>`,
+        to: customerEmail,
+        subject: `Your order from ${creatorName} — ${dropTitle}`,
+        html,
+      }),
+    });
+    if (r.ok) return res.status(200).json({ success: true });
+    const err = await r.text();
+    return res.status(500).json({ error: err });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+}

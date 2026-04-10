@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v23 — manual updates from Claude,
+// FOODDROP MVP v24 — manual updates from Claude,
 //                    fix cancelled orders in revenue calculations,
 //                    customer merge tool, signup_source tracking
 // ============================================================
@@ -665,6 +665,90 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     }
     setShowImportCSV(false); showToast(`${rows.length} customer${rows.length!==1?"s":""} imported!`); loadData();
   };
+  const [showManualOrder, setShowManualOrder] = useState(null); // drop object
+
+  const handleManualOrder = async ({ drop, customer, isNewCustomer, cartItems, paymentMethod }) => {
+    let customerId = customer?.id || null;
+    const customerName = customer?.name || "";
+    const customerEmail = customer?.email || "";
+
+    // Create new customer if needed
+    if (isNewCustomer && creator) {
+      const { data: nc } = await supabase.from("customers").insert({
+        creator_id: creator.id,
+        name: customerName,
+        email: customerEmail.toLowerCase().trim(),
+        phone: customer?.phone || "",
+        prefer_contact: "email",
+        signup_source: "manual",
+        opted_in: false,
+      }).select("*").single().execute();
+      if (nc) customerId = nc.id;
+    }
+
+    const dropItemsList = getDropItems(drop.id);
+    const total = cartItems.reduce((sum, ci) => {
+      const item = dropItemsList.find(i => i.id === ci.dropItemId);
+      return sum + (item ? Number(item.price) * ci.qty : 0);
+    }, 0);
+
+    const paymentStatus = paymentMethod === "invoice" ? "unpaid" : "paid";
+
+    const { data: no, error } = await supabase.from("orders").insert({
+      drop_id: drop.id,
+      customer_id: customerId,
+      customer_name: customerName,
+      customer_email: customerEmail.toLowerCase().trim(),
+      total,
+      status: "confirmed",
+      payment_method: paymentMethod,
+      payment_status: paymentStatus,
+    }).select("*").single().execute();
+
+    if (error || !no) { showToast("Failed to create order.", "error"); return; }
+
+    await supabase.from("order_items").insert(
+      cartItems.map(ci => {
+        const item = dropItemsList.find(i => i.id === ci.dropItemId);
+        return { order_id: no.id, drop_item_id: ci.dropItemId, item_name: item?.name || "", item_price: item?.price || 0, quantity: ci.qty };
+      })
+    ).execute();
+
+    // Update claimed counts
+    for (const ci of cartItems) {
+      const item = dropItemsList.find(i => i.id === ci.dropItemId);
+      if (item && item.quantity > 0) {
+        await supabase.from("drop_items").update({ claimed: item.claimed + ci.qty }).eq("id", item.id).execute();
+      }
+    }
+
+    // Send invoice email if payment method is invoice
+    if (paymentMethod === "invoice" && customerEmail) {
+      try {
+        fetch("/api/send-invoice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            creatorName: creator.name,
+            customerName,
+            customerEmail,
+            dropTitle: drop.title,
+            pickupDate: fmtDateLong(drop.pickup_date),
+            pickupTime: drop.pickup_time,
+            pickupLocation: drop.pickup_location,
+            items: cartItems.map(ci => {
+              const item = dropItemsList.find(i => i.id === ci.dropItemId);
+              return { name: item?.name || "", price: item?.price || 0, qty: ci.qty };
+            }),
+            total,
+          }),
+        });
+      } catch (e) { console.error("Invoice email failed:", e); }
+    }
+
+    showToast(`Order created for ${customerName}!`);
+    loadData();
+  };
   const [showBlast, setShowBlast] = useState(null); // drop object
 
   const handleSendBlast = async ({ drop, channel, audience, customNote }) => {
@@ -810,7 +894,7 @@ const handleDeleteDropPermanently = async (dropId) => {
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
-        {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}}/>}
+        {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}} onNewOrder={()=>setShowManualOrder(selectedDrop)}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
@@ -826,6 +910,7 @@ const handleDeleteDropPermanently = async (dropId) => {
       {showImportCSV && <ImportCSVModal onImport={handleImportCustomers} onClose={()=>setShowImportCSV(false)}/>}
       {showBulkDelete && <BulkDeleteCustomersModal count={showBulkDelete.length} onConfirm={(deleteOrders)=>{handleBulkDeleteCustomers(showBulkDelete,deleteOrders);setShowBulkDelete(null);}} onClose={()=>setShowBulkDelete(null)}/>}
       {showBlast && <BlastModal drop={showBlast} customers={customers} getDropOrders={getDropOrders} onSend={handleSendBlast} onClose={()=>setShowBlast(null)}/>}
+      {showManualOrder && <ManualOrderModal drop={showManualOrder} dropItems={getDropItems(showManualOrder.id)} customers={customers} creator={creator} onSave={handleManualOrder} onClose={()=>setShowManualOrder(null)}/>}
     </>
   );
 }
@@ -1494,7 +1579,7 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
 // ============================================================
 // DROP DETAIL — with archive, edit order buttons
 // ============================================================
-function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customers, onBack, onUpdateOrderStatus, onEndDrop, onEditDrop, onArchiveDrop, onEditOrder, onDuplicate }) {
+function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customers, onBack, onUpdateOrderStatus, onEndDrop, onEditDrop, onArchiveDrop, onEditOrder, onDuplicate, onNewOrder }) {
   const [view, setView] = useState("summary");
   const [pickedUpLocal, setPickedUpLocal] = useState({});
   const dI=getDropItems(drop.id); const dO=getDropOrders(drop.id); const activeDO=dO.filter(o=>o.status!=="cancelled"); const rev=activeDO.reduce((s,o)=>s+Number(o.total),0);
@@ -1523,6 +1608,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
         <button className="btn btn-secondary btn-sm" onClick={onEditDrop}>{I.edit} Edit</button>
         <button className="btn btn-secondary btn-sm" onClick={onDuplicate}>{I.copy} Duplicate</button>
         <span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>
+        {drop.status==="active"&&<button className="btn btn-primary btn-sm" onClick={onNewOrder}>+ New Order</button>}
         {drop.status==="active"&&<button className="btn btn-danger btn-sm" onClick={()=>onEndDrop(drop.id)}>End Drop</button>}
         <button className="btn btn-ghost btn-sm" onClick={onArchiveDrop}>{I.archive} Archive</button>
       </div>
@@ -1547,7 +1633,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
     {view==="orders"&&(<div className="page-enter">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>All Orders</h2></div>
       {dO.length===0?<div className="empty-state"><p>No orders yet.</p></div>:(
-        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);const isCancelled=order.status==="cancelled";return(<tr key={order.id} style={{opacity:isCancelled?0.6:1}}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td><td style={{fontWeight:600,textDecoration:isCancelled?"line-through":"none",color:isCancelled?"var(--text-tertiary)":"var(--text)"}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span></td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);const isCancelled=order.status==="cancelled";return(<tr key={order.id} style={{opacity:isCancelled?0.6:1}}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td><td style={{fontWeight:600,textDecoration:isCancelled?"line-through":"none",color:isCancelled?"var(--text-tertiary)":"var(--text)"}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span>{order.payment_status==="unpaid"&&<span className="badge" style={{background:"var(--red-light)",color:"var(--red)",marginLeft:4,fontSize:11}}>💳 Unpaid</span>}</td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
       )}
     </div>)}
 
@@ -2033,6 +2119,186 @@ function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
         <button className="btn btn-danger" disabled={!choice} onClick={()=>onConfirm(choice==="delete")}>Delete {count} Customer{count!==1?"s":""}</button>
       </div>
     </div></div>
+  );
+}
+      
+function ManualOrderModal({ drop, dropItems, customers, creator, onSave, onClose }) {
+  const [customerMode, setCustomerMode] = useState("existing"); // "existing" | "new"
+  const [search, setSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [cart, setCart] = useState({});
+  const [paymentMethod, setPaymentMethod] = useState("cash");
+  const [saving, setSaving] = useState(false);
+
+  const filtered = customers.filter(c =>
+    search.length < 2 ? false :
+    c.name?.toLowerCase().includes(search.toLowerCase()) ||
+    c.email?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const cartTotal = Object.entries(cart).reduce((sum, [id, qty]) => {
+    const item = dropItems.find(i => i.id === id);
+    return sum + (item ? Number(item.price) * qty : 0);
+  }, 0);
+  const cartCount = Object.values(cart).reduce((s, q) => s + q, 0);
+
+  const updateCart = (itemId, delta, item) => {
+    setCart(prev => {
+      const curr = prev[itemId] || 0;
+      const next = Math.max(0, curr + delta);
+      const max = item.quantity > 0 ? item.quantity - item.claimed : 999;
+      if (next > max) return prev;
+      return { ...prev, [itemId]: next };
+    });
+  };
+
+  const customerName = customerMode === "existing" ? selectedCustomer?.name : newName;
+  const customerEmail = customerMode === "existing" ? selectedCustomer?.email : newEmail;
+  const canSave = cartCount > 0 &&
+    (customerMode === "existing" ? !!selectedCustomer : (!!newName && !!newEmail));
+
+  const handleSave = async () => {
+    setSaving(true);
+    const cartItems = Object.entries(cart).filter(([, q]) => q > 0).map(([id, qty]) => ({ dropItemId: id, qty }));
+    await onSave({
+      drop,
+      customer: customerMode === "existing"
+        ? selectedCustomer
+        : { name: newName, email: newEmail, phone: newPhone },
+      isNewCustomer: customerMode === "new",
+      cartItems,
+      paymentMethod,
+    });
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{maxWidth:540,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+        <div className="modal-header">
+          <h2 style={{margin:0}}>+ New Order</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div style={{padding:"0 24px 24px"}}>
+
+          {/* Drop summary */}
+          <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"10px 14px",marginBottom:20}}>
+            <p style={{margin:0,fontWeight:600,fontSize:14}}>{drop.title}</p>
+            <p style={{margin:"2px 0 0",fontSize:13,color:"var(--text-secondary)"}}>
+              {drop.pickup_date ? new Date(drop.pickup_date+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) : ""}
+              {drop.pickup_time ? " · "+drop.pickup_time : ""}
+            </p>
+          </div>
+
+          {/* Customer selector */}
+          <div style={{marginBottom:20}}>
+            <p style={{margin:"0 0 10px",fontWeight:600,fontSize:14}}>Customer</p>
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <button onClick={()=>{setCustomerMode("existing");setSelectedCustomer(null);setSearch("");}}
+                style={{flex:1,padding:"8px 12px",borderRadius:"var(--radius-sm)",border:`2px solid ${customerMode==="existing"?"var(--accent)":"var(--border)"}`,background:customerMode==="existing"?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:13,cursor:"pointer",color:customerMode==="existing"?"var(--accent)":"var(--text-secondary)"}}>
+                Existing Customer
+              </button>
+              <button onClick={()=>{setCustomerMode("new");setSelectedCustomer(null);}}
+                style={{flex:1,padding:"8px 12px",borderRadius:"var(--radius-sm)",border:`2px solid ${customerMode==="new"?"var(--accent)":"var(--border)"}`,background:customerMode==="new"?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:13,cursor:"pointer",color:customerMode==="new"?"var(--accent)":"var(--text-secondary)"}}>
+                New Customer
+              </button>
+            </div>
+
+            {customerMode==="existing"&&(<>
+              {!selectedCustomer ? (<>
+                <input className="form-input" placeholder="Search by name or email..." value={search} onChange={e=>setSearch(e.target.value)}/>
+                {filtered.length>0&&(
+                  <div style={{border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",marginTop:4,overflow:"hidden"}}>
+                    {filtered.slice(0,6).map(c=>(
+                      <div key={c.id} onClick={()=>setSelectedCustomer(c)}
+                        style={{padding:"10px 14px",cursor:"pointer",borderBottom:"1px solid var(--border)",background:"var(--surface)"}}
+                        onMouseOver={e=>e.currentTarget.style.background="var(--surface-alt)"}
+                        onMouseOut={e=>e.currentTarget.style.background="var(--surface)"}>
+                        <div style={{fontWeight:600,fontSize:14}}>{c.name}</div>
+                        <div style={{fontSize:12,color:"var(--text-tertiary)"}}>{c.email}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {search.length>=2&&filtered.length===0&&<p style={{fontSize:13,color:"var(--text-tertiary)",marginTop:6}}>No customers found. Try "New Customer" to add them.</p>}
+              </>) : (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"var(--accent-light)",border:"1px solid var(--accent)",borderRadius:"var(--radius-sm)"}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14,color:"var(--accent)"}}>{selectedCustomer.name}</div>
+                    <div style={{fontSize:12,color:"var(--text-secondary)"}}>{selectedCustomer.email}</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setSelectedCustomer(null)}>Change</button>
+                </div>
+              )}
+            </>)}
+
+            {customerMode==="new"&&(<>
+              <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Full name" value={newName} onChange={e=>setNewName(e.target.value)}/></div>
+              <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="email@example.com" value={newEmail} onChange={e=>setNewEmail(e.target.value)}/></div>
+              <div className="form-group"><label className="form-label">Phone (optional)</label><input className="form-input" placeholder="(555) 555-5555" value={newPhone} onChange={e=>setNewPhone(formatPhone(e.target.value))}/></div>
+            </>)}
+          </div>
+
+          {/* Item picker */}
+          <div style={{marginBottom:20}}>
+            <p style={{margin:"0 0 10px",fontWeight:600,fontSize:14}}>Items</p>
+            <div style={{border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",overflow:"hidden"}}>
+              {dropItems.map((item,idx)=>{
+                const avail = item.quantity>0 ? item.quantity-item.claimed : 999;
+                const qty = cart[item.id]||0;
+                const soldOut = item.quantity>0&&avail<=0;
+                return (
+                  <div key={item.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",borderBottom:idx<dropItems.length-1?"1px solid var(--border)":"none",opacity:soldOut?.5:1}}>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14}}>{item.name}</div>
+                      <div style={{fontSize:12,color:"var(--text-tertiary)"}}>{fmt(item.price)}{item.quantity>0?` · ${avail} left`:""}</div>
+                    </div>
+                    {soldOut ? <span style={{fontSize:12,color:"var(--text-tertiary)"}}>Sold out</span> : (
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <button className="qty-btn" onClick={()=>updateCart(item.id,-1,item)} disabled={!qty}>−</button>
+                        <span style={{minWidth:20,textAlign:"center",fontWeight:600}}>{qty}</span>
+                        <button className="qty-btn" onClick={()=>updateCart(item.id,1,item)}>+</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {cartCount>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"10px 2px",fontWeight:600,fontSize:15,marginTop:4}}><span>Total</span><span>{fmt(cartTotal)}</span></div>}
+          </div>
+
+          {/* Payment method */}
+          <div style={{marginBottom:24}}>
+            <p style={{margin:"0 0 10px",fontWeight:600,fontSize:14}}>Payment</p>
+            <div style={{display:"flex",gap:8}}>
+              {["cash","venmo","invoice"].map(method=>(
+                <button key={method} onClick={()=>setPaymentMethod(method)}
+                  style={{flex:1,padding:"9px 8px",borderRadius:"var(--radius-sm)",border:`2px solid ${paymentMethod===method?"var(--accent)":"var(--border)"}`,background:paymentMethod===method?"var(--accent-light)":"var(--surface)",fontWeight:600,fontSize:13,cursor:"pointer",color:paymentMethod===method?"var(--accent)":"var(--text-secondary)",textTransform:"capitalize"}}>
+                  {method==="cash"?"💵 Cash":method==="venmo"?"💙 Venmo":"📧 Invoice"}
+                </button>
+              ))}
+            </div>
+            {paymentMethod==="invoice"&&customerEmail&&(
+              <p style={{margin:"8px 0 0",fontSize:12,color:"var(--text-tertiary)"}}>An invoice email will be sent to <strong>{customerEmail}</strong> automatically.</p>
+            )}
+            {paymentMethod==="invoice"&&!customerEmail&&(
+              <p style={{margin:"8px 0 0",fontSize:12,color:"var(--red)"}}>A customer email is required to send an invoice.</p>
+            )}
+          </div>
+
+          <div style={{display:"flex",gap:12}}>
+            <button className="btn btn-ghost" style={{flex:1}} onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" style={{flex:2}} disabled={!canSave||saving||(paymentMethod==="invoice"&&!customerEmail)} onClick={handleSave}>
+              {saving?"Creating...":cartCount>0?`Create Order — ${fmt(cartTotal)}`:"Create Order"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 function BlastModal({ drop, customers, getDropOrders, onSend, onClose }) {
