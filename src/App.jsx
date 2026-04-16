@@ -562,28 +562,11 @@ function LoginPage({ creator, onLogin, showToast }) {
 // ============================================================
 // LANDING PAGE
 // ============================================================
-function LandingPage({ creators }) {
-  return (
-    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
-      <div style={{textAlign:"center",maxWidth:480}}>
-        <div style={{fontSize:48,marginBottom:16}}>🍽️</div>
-        <h1 style={{marginBottom:8}}>FoodDrop</h1>
-        <p style={{color:"var(--text-secondary)",fontSize:16,marginBottom:32}}>The platform for food creators to manage drops, customers, and orders.</p>
-        {creators.length > 0 && (<>
-          <h3 style={{marginBottom:12,color:"var(--text-secondary)"}}>Active Creators</h3>
-          <div style={{display:"grid",gap:12}}>
-            {creators.filter(c=>c.slug).map(c => (
-              <a key={c.id} href={`#/${c.slug}`} className="card card-hover" style={{textDecoration:"none",color:"var(--text)",textAlign:"left"}}>
-                <h3>{c.name || "Unnamed Creator"}</h3>
-                {c.tagline && <p style={{fontSize:14,color:"var(--text-secondary)",marginTop:4}}>{c.tagline}</p>}
-                <div style={{fontSize:12,color:"var(--accent)",marginTop:8}}>Visit page →</div>
-              </a>
-            ))}
-          </div>
-        </>)}
-      </div>
-    </div>
-  );
+function LandingPage() {
+  useEffect(() => {
+    window.location.replace("/#/login");
+  }, []);
+  return null;
 }
 
 // ============================================================
