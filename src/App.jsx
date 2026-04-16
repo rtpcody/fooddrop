@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v25 — required field asterisks on drop form,
-//                    hide expired drops from customer storefront,
-//                    announcement-sent indicator to prevent
-//                    accidental duplicate email blasts
+// FOODDROP MVP v26 — pickup windows with slot limits.
+//                    Opt-in per drop. Creators configure
+//                    multiple windows, customers pick one at
+//                    checkout, slots enforced at order time.
+//                    Builds on v25.
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -93,6 +94,36 @@ const supabase = {
       } catch (e) { return { error: { message: e.message } }; }
     },
   },
+};
+
+// --- Pickup window helpers (v26) ---
+// Time strings are stored as 24h "HH:MM" (the native format of <input type="time">).
+// We format to 12h for display.
+const formatTime12 = (t24) => {
+  if (!t24) return "";
+  const [h, m] = t24.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return t24;
+  const hr = h % 12 || 12;
+  const period = h < 12 ? "AM" : "PM";
+  return `${hr}:${m.toString().padStart(2,"0")} ${period}`;
+};
+const formatWindow = (w) => w ? `${formatTime12(w.start)} – ${formatTime12(w.end)}` : "";
+// Count how many non-cancelled orders are in a given window.
+const windowOrderCount = (orders, dropId, windowId) =>
+  orders.filter(o => o.drop_id === dropId && o.pickup_window_id === windowId && o.status !== "cancelled").length;
+const windowSlotsRemaining = (window, orders, dropId) => {
+  if (!window || window.slotLimit == null) return null; // null = unlimited
+  return Math.max(0, window.slotLimit - windowOrderCount(orders, dropId, window.id));
+};
+// Derive a "5:00 PM – 7:00 PM" string from the span of all windows (earliest start to latest end).
+// Used so the auto-computed pickup_time keeps all existing display code working unchanged.
+const spanWindows = (windows) => {
+  if (!windows?.length) return "";
+  const sorted = [...windows].filter(w => w.start && w.end).sort((a,b) => a.start.localeCompare(b.start));
+  if (!sorted.length) return "";
+  const earliest = sorted[0].start;
+  const latest = [...sorted].sort((a,b) => b.end.localeCompare(a.end))[0].end;
+  return `${formatTime12(earliest)} – ${formatTime12(latest)}`;
 };
 
 // --- Icons ---
@@ -518,7 +549,7 @@ const handleLogin = async (email, password) => {
   return (
     <><style>{CSS}</style><div className="app">
       {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
-      <CustomerStorefront creator={creator} drops={drops} getDropItems={getDropItems} showToast={showToast} loadData={loadData} customers={customers}/>
+      <CustomerStorefront creator={creator} drops={drops} getDropItems={getDropItems} showToast={showToast} loadData={loadData} customers={customers} orders={orders}/>
       {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
     </div></>
   );
@@ -594,14 +625,14 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
 
   const handleCreateDrop = async (d, items) => {
     if (!creator) return;
-    const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null }).select("*").single().execute();
+    const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null, use_pickup_windows: !!d.useWindows, pickup_windows: d.useWindows ? d.pickupWindows : null }).select("*").single().execute();
     if (error || !nd) { showToast("Failed to create drop", "error"); return; }
     await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null }))).execute();
     setShowNewDrop(false); setDuplicateDrop(null); showToast("Drop created!"); loadData();
   };
 
   const handleEditDrop = async (dropId, d, items) => {
-    await supabase.from("drops").update({ title: d.title, description: d.description, pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null }).eq("id", dropId).execute();
+    await supabase.from("drops").update({ title: d.title, description: d.description, pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null, use_pickup_windows: !!d.useWindows, pickup_windows: d.useWindows ? d.pickupWindows : null }).eq("id", dropId).execute();
     for (const item of items) {
       const imgData = item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null;
       if (item.existingId) {
@@ -718,7 +749,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
             customerEmail,
             dropTitle: drop.title,
             pickupDate: fmtDateLong(drop.pickup_date),
-            pickupTime: drop.pickup_time,
+            pickupTime: drop.use_pickup_windows && selectedWindow ? formatWindow(selectedWindow) : drop.pickup_time,
             pickupLocation: drop.pickup_location,
             items: cartItems.map(ci => {
               const item = dropItemsList.find(i => i.id === ci.dropItemId);
@@ -1630,7 +1661,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
     {view==="orders"&&(<div className="page-enter">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>All Orders</h2></div>
       {dO.length===0?<div className="empty-state"><p>No orders yet.</p></div>:(
-        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);const isCancelled=order.status==="cancelled";return(<tr key={order.id} style={{opacity:isCancelled?0.6:1}}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td><td style={{fontWeight:600,textDecoration:isCancelled?"line-through":"none",color:isCancelled?"var(--text-tertiary)":"var(--text)"}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span>{order.payment_status==="unpaid"&&<span className="badge" style={{background:"var(--red-light)",color:"var(--red)",marginLeft:4,fontSize:11}}>💳 Unpaid</span>}</td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button>{order.payment_status==="unpaid"&&<button className="btn btn-sm btn-ghost" onClick={()=>onMarkPaid(order.id)} style={{color:"var(--green)"}}>💳 Mark Paid</button>}<button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Items</th>{drop.use_pickup_windows&&<th>Window</th>}<th>Total</th><th>Status</th><th>Actions</th></tr></thead><tbody>{dO.map(order=>{const cust=customers.find(c=>c.id===order.customer_id);const ois=getOrderItems(order.id);const isCancelled=order.status==="cancelled";const orderWindow=drop.use_pickup_windows?(drop.pickup_windows||[]).find(w=>w.id===order.pickup_window_id):null;return(<tr key={order.id} style={{opacity:isCancelled?0.6:1}}><td><div style={{fontWeight:600}}>{cust?.name||order.customer_name||"Guest"}</div><div style={{fontSize:12,color:"var(--text-tertiary)"}}>{cust?.email||order.customer_email}</div></td><td>{ois.map(oi=><div key={oi.id} style={{fontSize:13}}>{oi.quantity}× {oi.item_name}</div>)}</td>{drop.use_pickup_windows&&<td style={{fontSize:13,whiteSpace:"nowrap"}}>{orderWindow?formatWindow(orderWindow):<span style={{color:"var(--text-tertiary)"}}>—</span>}</td>}<td style={{fontWeight:600,textDecoration:isCancelled?"line-through":"none",color:isCancelled?"var(--text-tertiary)":"var(--text)"}}>{fmt(order.total)}</td><td><span className={`badge badge-${order.status}`}>{order.status==="picked_up"?"Picked Up":order.status==="cancelled"?"Cancelled":"Confirmed"}</span>{order.payment_status==="unpaid"&&<span className="badge" style={{background:"var(--red-light)",color:"var(--red)",marginLeft:4,fontSize:11}}>💳 Unpaid</span>}</td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{order.status==="confirmed"&&<><button className="btn btn-sm btn-secondary" onClick={()=>onUpdateOrderStatus(order.id,"picked_up")}>{I.check} Picked Up</button>{order.payment_status==="unpaid"&&<button className="btn btn-sm btn-ghost" onClick={()=>onMarkPaid(order.id)} style={{color:"var(--green)"}}>💳 Mark Paid</button>}<button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"cancelled")} style={{color:"var(--red)"}}>Cancel</button></>}{order.status==="picked_up"&&<><button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Undo Pickup</button><button className="btn btn-sm btn-ghost" onClick={()=>onEditOrder(order)}>{I.edit} Edit</button></>}{order.status==="cancelled"&&<button className="btn btn-sm btn-ghost" onClick={()=>onUpdateOrderStatus(order.id,"confirmed")}>{I.undo} Restore</button>}</div></td></tr>)})}</tbody></table></div>
       )}
     </div>)}
 
@@ -1638,28 +1669,59 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
     {view==="pickup"&&(<div className="page-enter">
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2>Pickup Checklist</h2><button className="btn btn-secondary btn-sm" onClick={handlePrint}>{I.print} Print</button></div>
       <p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16}}>Tap to check off customers as they pick up their orders.</p>
-      {activeDO.length===0?<div className="empty-state"><p>No orders to check off.</p></div>:(
-        <div className="pickup-list">
-          {activeDO.map(order => {
-            const cust = customers.find(c => c.id === order.customer_id);
-            const ois = getOrderItems(order.id);
-            const status = getOrderStatus(order);
-            const isChecked = status === "picked_up";
-            return (
-              <div key={order.id} className={`pickup-item ${isChecked?"checked":""}`}>
-                <div className={`pickup-item-check ${isChecked?"checked":""}`} onClick={()=>togglePickup(order.id, status)}>
-                  {isChecked && <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>}
-                </div>
-                <div className="pickup-item-info">
-                  <div className="pickup-item-name" style={{textDecoration:isChecked?"line-through":"none",opacity:isChecked?.6:1}}>{cust?.name||order.customer_name||"Guest"}{order.payment_status==="unpaid"&&<span className="badge" style={{background:"var(--red-light)",color:"var(--red)",fontSize:10,marginLeft:6}}>💳 Unpaid</span>}</div>
-                  <div className="pickup-item-items">{ois.map(oi=>`${oi.quantity}× ${oi.item_name}`).join(", ")}</div>
-                </div>
-                <div className="pickup-item-total" style={{opacity:isChecked?.6:1}}>{fmt(order.total)}</div>
+      {activeDO.length===0?<div className="empty-state"><p>No orders to check off.</p></div>:(() => {
+        // Render a single order row (reused whether we're grouping or not)
+        const renderRow = (order) => {
+          const cust = customers.find(c => c.id === order.customer_id);
+          const ois = getOrderItems(order.id);
+          const status = getOrderStatus(order);
+          const isChecked = status === "picked_up";
+          return (
+            <div key={order.id} className={`pickup-item ${isChecked?"checked":""}`}>
+              <div className={`pickup-item-check ${isChecked?"checked":""}`} onClick={()=>togglePickup(order.id, status)}>
+                {isChecked && <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>}
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div className="pickup-item-info">
+                <div className="pickup-item-name" style={{textDecoration:isChecked?"line-through":"none",opacity:isChecked?.6:1}}>{cust?.name||order.customer_name||"Guest"}{order.payment_status==="unpaid"&&<span className="badge" style={{background:"var(--red-light)",color:"var(--red)",fontSize:10,marginLeft:6}}>💳 Unpaid</span>}</div>
+                <div className="pickup-item-items">{ois.map(oi=>`${oi.quantity}× ${oi.item_name}`).join(", ")}</div>
+              </div>
+              <div className="pickup-item-total" style={{opacity:isChecked?.6:1}}>{fmt(order.total)}</div>
+            </div>
+          );
+        };
+        // v26: if drop uses windows, group by window (sorted by start time).
+        // Orders without a window id (legacy or manual) fall into "Unassigned".
+        if (drop.use_pickup_windows && Array.isArray(drop.pickup_windows) && drop.pickup_windows.length) {
+          const sortedWindows = [...drop.pickup_windows].sort((a,b) => (a.start||"").localeCompare(b.start||""));
+          const unassigned = activeDO.filter(o => !o.pickup_window_id || !sortedWindows.find(w=>w.id===o.pickup_window_id));
+          return (
+            <div>
+              {sortedWindows.map(w => {
+                const wOrders = activeDO.filter(o => o.pickup_window_id === w.id);
+                if (!wOrders.length) return null;
+                return (
+                  <div key={w.id} style={{marginBottom:20}}>
+                    <div style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)",marginBottom:8,padding:"0 4px"}}>
+                      🕐 {formatWindow(w)} · {wOrders.length} order{wOrders.length!==1?"s":""}
+                    </div>
+                    <div className="pickup-list">{wOrders.map(renderRow)}</div>
+                  </div>
+                );
+              })}
+              {unassigned.length > 0 && (
+                <div style={{marginBottom:20}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"var(--text-tertiary)",marginBottom:8,padding:"0 4px"}}>
+                    Unassigned · {unassigned.length} order{unassigned.length!==1?"s":""}
+                  </div>
+                  <div className="pickup-list">{unassigned.map(renderRow)}</div>
+                </div>
+              )}
+            </div>
+          );
+        }
+        // No windows — original flat list
+        return <div className="pickup-list">{activeDO.map(renderRow)}</div>;
+      })()}
       <div style={{marginTop:16,padding:12,background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",fontSize:13,color:"var(--text-secondary)",textAlign:"center"}}>
         {dO.filter(o=>getOrderStatus(o)==="picked_up").length} of {activeDO.length} picked up · {fmt(activeDO.filter(o=>getOrderStatus(o)==="picked_up").reduce((s,o)=>s+Number(o.total),0))} collected
       </div>
@@ -2622,6 +2684,21 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
   const [pickupDate, setPickupDate] = useState(duplicateFrom ? "" : (src?.pickup_date || ""));
   const [pickupTime, setPickupTime] = useState(src?.pickup_time || "");
   const [pickupLocation, setPickupLocation] = useState(src?.pickup_location || "");
+  // v26: pickup windows (opt-in)
+  const [useWindows, setUseWindows] = useState(!!src?.use_pickup_windows);
+  const [windows, setWindows] = useState(() => {
+    if (src?.pickup_windows?.length) {
+      return src.pickup_windows.map(w => ({
+        id: w.id, start: w.start || "", end: w.end || "",
+        slotLimit: w.slotLimit == null ? "" : String(w.slotLimit),
+        unlimited: w.slotLimit == null,
+      }));
+    }
+    return [{ id: "w0", start: "", end: "", slotLimit: "", unlimited: false }];
+  });
+  const addWindow = () => setWindows([...windows, { id: `w${Date.now()}`, start: "", end: "", slotLimit: "", unlimited: false }]);
+  const removeWindow = (id) => windows.length > 1 && setWindows(windows.filter(w => w.id !== id));
+  const updateWindow = (id, f, v) => setWindows(windows.map(w => (w.id === id ? { ...w, [f]: v } : w)));
   const [imageUrl, setImageUrl] = useState(src?.image_data?.url || src?.image_url || "");
   const [imagePan, setImagePan] = useState({ x: src?.image_data?.x ?? 50, y: src?.image_data?.y ?? 50 });
   const [items, setItems] = useState(() => {
@@ -2640,8 +2717,27 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
   const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 } }]);
   const removeItem = (id) => items.length > 1 && setItems(items.filter(i => i.id !== id));
   const updateItem = (id, f, v) => setItems(items.map(i => (i.id === id ? { ...i, [f]: v } : i)));
-  const canSave = title && pickupDate && pickupTime && pickupLocation && items.every(i => i.name && i.price) && !saving;
-  const handleSave = async () => { setSaving(true); await onSave({ title, description: desc, pickupDate, pickupTime, pickupLocation, imageUrl, imagePan }, items); setSaving(false); };
+  // v26: when windows are enabled, auto-compute pickup_time string from the windows span
+  // so all existing display code continues to work.
+  const windowsValid = windows.every(w => w.start && w.end && (w.unlimited || (w.slotLimit && Number(w.slotLimit) > 0)));
+  const effectivePickupTime = useWindows ? spanWindows(windows) : pickupTime;
+  const canSave = title && pickupDate && pickupLocation && !saving
+    && items.every(i => i.name && i.price)
+    && (useWindows ? (windows.length > 0 && windowsValid) : !!pickupTime);
+  const handleSave = async () => {
+    setSaving(true);
+    const normalizedWindows = useWindows ? windows.map(w => ({
+      id: w.id, start: w.start, end: w.end,
+      slotLimit: w.unlimited ? null : parseInt(w.slotLimit) || 0,
+    })) : null;
+    await onSave({
+      title, description: desc, pickupDate,
+      pickupTime: effectivePickupTime,
+      pickupLocation, imageUrl, imagePan,
+      useWindows, pickupWindows: normalizedWindows,
+    }, items);
+    setSaving(false);
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
@@ -2649,9 +2745,53 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
       <div className="form-group"><label className="form-label">Drop Title <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
       <ImageUpload value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Drop Cover Image (optional)" frameRatio="2:1"/>
-      <div className="form-row"><div className="form-group"><label className="form-label">Pickup Date <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div><div className="form-group"><label className="form-label">Pickup Time <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div></div>
+      <div className="form-row">
+        <div className="form-group"><label className="form-label">Pickup Date <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div>
+        {!useWindows && <div className="form-group"><label className="form-label">Pickup Time <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div>}
+      </div>
       <div className="form-group"><label className="form-label">Pickup Location <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
-      <div style={{marginBottom:20}}>
+
+      {/* v26: Pickup windows opt-in */}
+      <div style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:"12px 14px",marginBottom:16}}>
+        <label className="checkbox-row" style={{margin:0}}>
+          <input type="checkbox" checked={useWindows} onChange={e=>setUseWindows(e.target.checked)}/>
+          <span style={{fontWeight:600}}>Use pickup windows</span>
+        </label>
+        <p style={{margin:"6px 0 0 26px",fontSize:12,color:"var(--text-secondary)"}}>
+          Let customers pick a specific time slot at checkout. Good for staggered pickups or limited counter space.
+        </p>
+      </div>
+
+      {useWindows && (
+        <div style={{marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <label className="form-label" style={{marginBottom:0}}>Pickup Windows <span style={{color:"var(--accent)"}}>*</span></label>
+            <button className="btn btn-ghost btn-sm" onClick={addWindow}>{I.plus} Add Window</button>
+          </div>
+          {windows.map((w, idx) => (
+            <div key={w.id} style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:16,marginBottom:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Window {idx+1}</span>
+                {windows.length>1 && <button className="btn btn-ghost btn-sm" onClick={()=>removeWindow(w.id)} style={{color:"var(--accent)",padding:4}}>{I.x}</button>}
+              </div>
+              <div className="form-row">
+                <div className="form-group" style={{marginBottom:0}}><label className="form-label" style={{fontSize:12}}>Start</label><input className="form-input" type="time" value={w.start} onChange={e=>updateWindow(w.id,"start",e.target.value)}/></div>
+                <div className="form-group" style={{marginBottom:0}}><label className="form-label" style={{fontSize:12}}>End</label><input className="form-input" type="time" value={w.end} onChange={e=>updateWindow(w.id,"end",e.target.value)}/></div>
+              </div>
+              <div style={{marginTop:10}}>
+                <label className="form-label" style={{fontSize:12}}>Slot limit</label>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <input className="form-input" type="number" min="1" placeholder="e.g. 5" value={w.unlimited?"":w.slotLimit} disabled={w.unlimited} onChange={e=>updateWindow(w.id,"slotLimit",e.target.value)} style={{flex:"0 0 140px"}}/>
+                  <label className="checkbox-row" style={{margin:0}}><input type="checkbox" checked={w.unlimited} onChange={e=>updateWindow(w.id,"unlimited",e.target.checked)}/>Unlimited</label>
+                </div>
+              </div>
+            </div>
+          ))}
+          <p style={{fontSize:12,color:"var(--text-tertiary)",margin:"8px 0 0"}}>
+            Customers will see only windows with slots available. Once a window is full, it's hidden from checkout.
+          </p>
+        </div>
+      )}      <div style={{marginBottom:20}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><label className="form-label" style={{marginBottom:0}}>Menu Items <span style={{color:"var(--accent)"}}>*</span></label><button className="btn btn-ghost btn-sm" onClick={addItem}>{I.plus} Add Item</button></div>
         {items.map((item,idx)=>(<div key={item.id} style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:16,marginBottom:8}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Item {idx+1}</span>{items.length>1&&<button className="btn btn-ghost btn-sm" onClick={()=>removeItem(item.id)} style={{color:"var(--accent)",padding:4}}>{I.x}</button>}</div>
@@ -2903,7 +3043,7 @@ function Lightbox({ src, onClose }) {
 // ============================================================
 // CUSTOMER STOREFRONT
 // ============================================================
-function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData, customers }) {
+function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData, customers, orders }) {
   const [selectedDrop, setSelectedDrop] = useState(null);
   const [orderConfirmation, setOrderConfirmation] = useState(null);
   const [showSignup, setShowSignup] = useState(false);
@@ -2923,7 +3063,7 @@ function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData,
   }, [creator?.theme]);
 
   if (orderConfirmation) return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter"><OrderConfirmation order={orderConfirmation} creator={creator} onBack={()=>{setOrderConfirmation(null);setSelectedDrop(null)}}/></div></>);
-  if (selectedDrop) return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter"><DropOrderPage drop={selectedDrop} items={getDropItems(selectedDrop.id)} creator={creator} customers={customers} onBack={()=>setSelectedDrop(null)} onOrderPlaced={order=>{setOrderConfirmation(order);loadData()}} showToast={showToast}/></div></>);
+  if (selectedDrop) return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter"><DropOrderPage drop={selectedDrop} items={getDropItems(selectedDrop.id)} creator={creator} customers={customers} orders={orders} onBack={()=>setSelectedDrop(null)} onOrderPlaced={order=>{setOrderConfirmation(order);loadData()}} showToast={showToast}/></div></>);
 
   return (<><CustomerHeader creator={creator}/><div className="cust-body page-enter">
     {active.length===0?(<div className="empty-state" style={{marginTop:40}}><div className="empty-state-icon">{I.drop}</div><h3>No active drops right now</h3><p style={{marginTop:8}}>Check back soon!</p></div>):(<>
@@ -2960,7 +3100,7 @@ function CustomerHeader({ creator }) {
   );
 }
 
-function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced, showToast }) {
+function DropOrderPage({ drop, items, creator, customers, orders, onBack, onOrderPlaced, showToast }) {
   const [cart, setCart] = useState({});
   const [step, setStep] = useState("menu");
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [phone, setPhone] = useState(""); const [preferContact, setPreferContact] = useState("email");
@@ -2969,6 +3109,10 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
   const [emailStep, setEmailStep] = useState("entry"); // "entry" | "recognized" | "new"
   const [lookingUp, setLookingUp] = useState(false);
   const [returningCustomer, setReturningCustomer] = useState(null);
+  // v26: pickup window selection (only relevant if drop.use_pickup_windows)
+  const [selectedWindowId, setSelectedWindowId] = useState(null);
+  const dropWindows = drop.use_pickup_windows && Array.isArray(drop.pickup_windows) ? drop.pickup_windows : [];
+  const selectedWindow = dropWindows.find(w => w.id === selectedWindowId) || null;
 
   const handleEmailContinue = async () => {
     if (!email) return;
@@ -3006,7 +3150,21 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
       const { data: nc } = await supabase.from("customers").insert({ creator_id: creator.id, name, email: email.toLowerCase().trim(), phone, prefer_contact: preferContact, signup_source: "order" }).select("*").single().execute();
       if (nc) customerId = nc.id;
     }
-    const { data: no, error } = await supabase.from("orders").insert({ drop_id: drop.id, customer_id: customerId, total: cartTotal, status: "confirmed", customer_name: name, customer_email: email.toLowerCase().trim() }).select("*").single().execute();
+    // v26: Re-check slot availability right before writing the order. This catches
+    // the race where two customers pick the last slot simultaneously; whoever's
+    // insert lands second gets the error. Not bulletproof (no DB-level lock) but
+    // good enough at cottage-food scale.
+    if (drop.use_pickup_windows) {
+      if (!selectedWindow) { showToast("Please pick a pickup window", "error"); setPlacing(false); return; }
+      if (selectedWindow.slotLimit != null) {
+        const taken = windowOrderCount(orders || [], drop.id, selectedWindow.id);
+        if (taken >= selectedWindow.slotLimit) {
+          showToast("That window just filled up — please pick another.", "error");
+          setSelectedWindowId(null); setPlacing(false); return;
+        }
+      }
+    }
+    const { data: no, error } = await supabase.from("orders").insert({ drop_id: drop.id, customer_id: customerId, total: cartTotal, status: "confirmed", customer_name: name, customer_email: email.toLowerCase().trim(), pickup_window_id: drop.use_pickup_windows ? selectedWindow?.id : null }).select("*").single().execute();
     if (error || !no) { showToast("Failed to place order", "error"); setPlacing(false); return; }
     await supabase.from("order_items").insert(cartItems.map(ci => { const di = items.find(d => d.id === ci.dropItemId); return { order_id: no.id, drop_item_id: ci.dropItemId, item_name: di?.name || "Unknown", item_price: di?.price || 0, quantity: ci.qty }; })).execute();
     for (const ci of cartItems) { const di = items.find(d => d.id === ci.dropItemId); if (di) await supabase.from("drop_items").update({ claimed: di.claimed + ci.qty }).eq("id", di.id).execute(); }
@@ -3023,7 +3181,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
           creatorName: creator?.name || "FoodDrop",
           dropTitle: drop.title,
           pickupDate: fmtDateLong(drop.pickup_date),
-          pickupTime: drop.pickup_time,
+          pickupTime: drop.use_pickup_windows && selectedWindow ? formatWindow(selectedWindow) : drop.pickup_time,
           pickupLocation: drop.pickup_location,
           items: orderDetail.items,
           total: cartTotal,
@@ -3080,6 +3238,44 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
         <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0 0",fontFamily:"var(--font-display)",fontSize:20,fontWeight:600}}><span>Total</span><span>{fmt(cartTotal)}</span></div>
         <div style={{fontSize:12,color:"var(--text-tertiary)",marginTop:4}}>💵 Pay cash at pickup</div>
       </div>
+
+      {/* v26: Pickup window picker */}
+      {drop.use_pickup_windows && dropWindows.length > 0 && (
+        <div className="card" style={{marginBottom:20}}>
+          <h3 style={{marginBottom:4}}>Pick your pickup window</h3>
+          <p style={{color:"var(--text-secondary)",fontSize:14,marginBottom:16}}>Choose a time that works for you.</p>
+          <div style={{display:"grid",gap:10}}>
+            {dropWindows.map(w => {
+              const remaining = windowSlotsRemaining(w, orders || [], drop.id);
+              const isFull = remaining === 0;
+              const isSelected = selectedWindowId === w.id;
+              return (
+                <button
+                  key={w.id}
+                  onClick={()=>!isFull&&setSelectedWindowId(w.id)}
+                  disabled={isFull}
+                  style={{
+                    textAlign:"left",
+                    padding:"12px 16px",
+                    borderRadius:"var(--radius-sm)",
+                    border:`2px solid ${isSelected?"var(--accent)":"var(--border)"}`,
+                    background:isSelected?"var(--accent-light)":"var(--surface)",
+                    cursor:isFull?"not-allowed":"pointer",
+                    opacity:isFull?0.5:1,
+                    display:"flex",
+                    justifyContent:"space-between",
+                    alignItems:"center",
+                  }}>
+                  <span style={{fontWeight:600,color:isSelected?"var(--accent)":"var(--text)"}}>{formatWindow(w)}</span>
+                  <span style={{fontSize:12,color:"var(--text-secondary)"}}>
+                    {remaining == null ? "Open" : isFull ? "Full" : `${remaining} slot${remaining!==1?"s":""} left`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 <div className="card">
         <h3 style={{marginBottom:16}}>Your Information</h3>
 
@@ -3130,7 +3326,7 @@ function DropOrderPage({ drop, items, creator, customers, onBack, onOrderPlaced,
           <div className="form-group"><label className="form-label">How should we reach you about future drops?</label><div style={{display:"flex",gap:20}}><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="email"} onChange={()=>setPreferContact("email")}/>{I.mail} Email</label><label className="checkbox-row"><input type="radio" name="prefer" checked={preferContact==="sms"} onChange={()=>setPreferContact("sms")}/>{I.phone} Text / SMS</label></div></div>
         </>)}
       </div>
-      <button className="btn btn-primary btn-full" style={{marginTop:20,padding:"14px 24px",fontSize:16}} disabled={!name||!email||emailStep==="entry"||placing} onClick={handlePlaceOrder}>{placing?"Placing order...":`Confirm Order — ${fmt(cartTotal)}`}</button>
+      <button className="btn btn-primary btn-full" style={{marginTop:20,padding:"14px 24px",fontSize:16}} disabled={!name||!email||emailStep==="entry"||placing||(drop.use_pickup_windows&&!selectedWindowId)} onClick={handlePlaceOrder}>{placing?"Placing order...":`Confirm Order — ${fmt(cartTotal)}`}</button>
     </>)}
   </>);
 }
