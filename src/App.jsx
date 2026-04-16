@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v24 — manual updates from Claude,
-//                    fix cancelled orders in revenue calculations,
-//                    customer merge tool, signup_source tracking
+// FOODDROP MVP v25 — required field asterisks on drop form,
+//                    hide expired drops from customer storefront,
+//                    announcement-sent indicator to prevent
+//                    accidental duplicate email blasts
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -773,6 +774,15 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       });
       const data = await res.json();
       if (data.success) {
+        // Record that the announcement was sent so the UI can warn against
+        // accidental re-sends. Non-blocking: if this patch fails we still
+        // consider the blast itself successful.
+        const prevCount = Number(drop.announcement_sent_count || 0);
+        await supabase.from("drops").update({
+          announcement_sent_at: new Date().toISOString(),
+          announcement_sent_count: prevCount + 1,
+        }).eq("id", drop.id).execute();
+        await loadData();
         showToast(`📣 Blast sent to ${data.sent} customer${data.sent !== 1 ? "s" : ""}!`);
       } else {
         showToast("Blast failed. Check your email setup.", "error");
@@ -1558,7 +1568,7 @@ function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchi
       </div>
     </div>
     {visible.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.drop}</div><h3>No drops yet</h3><p style={{marginTop:8}}>Create your first drop to start taking orders.</p></div>):(
-      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button><button className="btn btn-danger btn-sm" onClick={e=>{e.stopPropagation();onDeletePermanently(drop)}}>{I.trash} Delete</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>{drop.status==="active"&&<button className="btn btn-primary btn-sm" onClick={e=>{e.stopPropagation();onAnnounce(drop)}} title="Announce this drop">📣 Announce</button>}<button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
+      <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button><button className="btn btn-danger btn-sm" onClick={e=>{e.stopPropagation();onDeletePermanently(drop)}}>{I.trash} Delete</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>{drop.status==="active"&&(drop.announcement_sent_at?<button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();if(window.confirm(`You already sent an announcement for "${drop.title}" on ${new Date(drop.announcement_sent_at).toLocaleDateString("en-US",{month:"short",day:"numeric"})}${drop.announcement_sent_count>1?` (${drop.announcement_sent_count} times total)`:""}. Send another?`))onAnnounce(drop)}} title={`Sent ${new Date(drop.announcement_sent_at).toLocaleString()}`} style={{color:"var(--text-secondary)"}}>✅ Announced</button>:<button className="btn btn-primary btn-sm" onClick={e=>{e.stopPropagation();onAnnounce(drop)}} title="Announce this drop">📣 Announce</button>)}<button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
     )}
   </>);
 }
@@ -2636,22 +2646,22 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="modal-header"><h2>{mode==="edit"?"Edit Drop":duplicateFrom?"Duplicate Drop":"Create New Drop"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
-      <div className="form-group"><label className="form-label">Drop Title</label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
+      <div className="form-group"><label className="form-label">Drop Title <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder='e.g., "Friday Dinner Box — March 6"' value={title} onChange={e=>setTitle(e.target.value)}/></div>
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
       <ImageUpload value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Drop Cover Image (optional)" frameRatio="2:1"/>
-      <div className="form-row"><div className="form-group"><label className="form-label">Pickup Date</label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div><div className="form-group"><label className="form-label">Pickup Time</label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div></div>
-      <div className="form-group"><label className="form-label">Pickup Location</label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
+      <div className="form-row"><div className="form-group"><label className="form-label">Pickup Date <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div><div className="form-group"><label className="form-label">Pickup Time <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div></div>
+      <div className="form-group"><label className="form-label">Pickup Location <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
       <div style={{marginBottom:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><label className="form-label" style={{marginBottom:0}}>Menu Items</label><button className="btn btn-ghost btn-sm" onClick={addItem}>{I.plus} Add Item</button></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><label className="form-label" style={{marginBottom:0}}>Menu Items <span style={{color:"var(--accent)"}}>*</span></label><button className="btn btn-ghost btn-sm" onClick={addItem}>{I.plus} Add Item</button></div>
         {items.map((item,idx)=>(<div key={item.id} style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:16,marginBottom:8}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Item {idx+1}</span>{items.length>1&&<button className="btn btn-ghost btn-sm" onClick={()=>removeItem(item.id)} style={{color:"var(--accent)",padding:4}}>{I.x}</button>}</div>
-          <input className="form-input" placeholder="Item name" value={item.name} onChange={e=>updateItem(item.id,"name",e.target.value)} style={{marginBottom:8}}/>
+          <input className="form-input" placeholder="Item name *" value={item.name} onChange={e=>updateItem(item.id,"name",e.target.value)} style={{marginBottom:8}}/>
           <textarea className="form-textarea" placeholder="Description (optional) — ingredients, allergens, serving size..." value={item.description} onChange={e=>updateItem(item.id,"description",e.target.value)} style={{marginBottom:8,minHeight:56,fontSize:13}}/>
-          <div className="form-row"><input className="form-input" type="number" placeholder="Price" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>
-          <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
+          <div className="form-row"><input className="form-input" type="number" placeholder="Price *" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>          <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
           <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} panValue={item.imagePan} onPanChange={pan=>updateItem(item.id,"imagePan",pan)} label="Item Image (optional)" frameRatio="1:1"/>
         </div>))}
       </div>
+      <p style={{fontSize:12,color:"var(--text-tertiary)",margin:"0 0 10px",textAlign:"center"}}><span style={{color:"var(--accent)"}}>*</span> Required fields</p>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Drop")}</button>
     </div></div>
   );
@@ -2897,7 +2907,15 @@ function CustomerStorefront({ creator, drops, getDropItems, showToast, loadData,
   const [selectedDrop, setSelectedDrop] = useState(null);
   const [orderConfirmation, setOrderConfirmation] = useState(null);
   const [showSignup, setShowSignup] = useState(false);
-  const active = drops.filter(d=>d.status==="active"&&!d.archived);
+  // Hide drops whose pickup date has already passed (YYYY-MM-DD local compare)
+  // Drops on today's date remain visible all day, then drop off at midnight.
+  const today = new Date(); today.setHours(0,0,0,0);
+  const active = drops.filter(d => {
+    if (d.status !== "active" || d.archived) return false;
+    if (!d.pickup_date) return true; // safety: don't hide drops missing a date
+    const pickup = new Date(d.pickup_date + "T00:00:00");
+    return pickup >= today;
+  });
 
   // Apply creator's theme on mount
   useEffect(() => {
