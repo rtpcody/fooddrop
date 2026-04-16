@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v27b — email polish pass:
-//                     • .ics pickup invite attached to
-//                       confirmation emails (honors windows)
-//                     • drop cover image banner on confirmation
-//                     • announcement email rebranded to match
-//                       welcome email's editorial aesthetic
+// FOODDROP MVP v27.1 — bug fixes + preview:
+//                      • archived drop Delete button actually
+//                        deletes from the DB (modal was never
+//                        rendered; state was a no-op)
+//                      • view resets cleanly after delete
+//                      • "Send preview to me" button on
+//                        announcement modal — reuses send-blast
+//                        endpoint, doesn't flip the sent indicator
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -881,6 +883,39 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       showToast("Blast failed — network error.", "error");
     }
   };
+
+  // v27.1: Send a preview blast to a single address (typically the creator's email).
+  // Reuses the same /api/send-blast endpoint with a one-customer list.
+  // Does NOT flip announcement_sent_at so the v25 sent indicator stays accurate.
+  const handleSendPreviewBlast = async ({ drop, customNote, previewEmail }) => {
+    if (!previewEmail) { showToast("Missing preview email address.", "error"); return { success: false }; }
+    const dropItemsList = getDropItems(drop.id);
+    try {
+      const res = await fetch("/api/send-blast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          creator,
+          drop,
+          items: dropItemsList,
+          customers: [{ name: creator?.name || "Preview", email: previewEmail, opted_in: true }],
+          channel: "email",
+          customNote: customNote || "",
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.sent > 0) {
+        showToast(`👁 Preview sent to ${previewEmail}`);
+        return { success: true };
+      }
+      showToast("Preview send failed. Check the address and try again.", "error");
+      return { success: false };
+    } catch {
+      showToast("Preview send failed — network error.", "error");
+      return { success: false };
+    }
+  };
+
   const handleEditProfile = async (d) => {
     if (!creator) return;
     await supabase.from("creators").update({
@@ -923,6 +958,10 @@ const handleDeleteDropPermanently = async (dropId) => {
     await supabase.from("drop_items").delete().eq("drop_id", dropId).execute();
     const { error } = await supabase.from("drops").delete().eq("id", dropId).execute();
     if (error) { showToast("Delete failed — check Supabase RLS policies.", "error"); return; }
+    // v27.1: close the confirmation modal + defensively drop the detail view if
+    // the user was somehow viewing the drop we just deleted.
+    setShowDeleteDrop(null);
+    if (selectedDrop?.id === dropId) setSelectedDrop(null);
     showToast("Drop permanently deleted."); loadData();
   };
 
@@ -996,8 +1035,10 @@ const handleDeleteDropPermanently = async (dropId) => {
       {showEditOrder && <EditOrderModal order={showEditOrder.order} dropItems={getDropItems(showEditOrder.dropId)} existingOrderItems={getOrderItems(showEditOrder.order.id)} onSave={(items)=>handleEditOrder(showEditOrder.order.id,items,showEditOrder.dropId)} onClose={()=>setShowEditOrder(null)}/>}
       {showImportCSV && <ImportCSVModal onImport={handleImportCustomers} onClose={()=>setShowImportCSV(false)}/>}
       {showBulkDelete && <BulkDeleteCustomersModal count={showBulkDelete.length} onConfirm={(deleteOrders)=>{handleBulkDeleteCustomers(showBulkDelete,deleteOrders);setShowBulkDelete(null);}} onClose={()=>setShowBulkDelete(null)}/>}
-      {showBlast && <BlastModal drop={showBlast} customers={customers} getDropOrders={getDropOrders} onSend={handleSendBlast} onClose={()=>setShowBlast(null)}/>}
+      {showBlast && <BlastModal drop={showBlast} creator={creator} customers={customers} getDropOrders={getDropOrders} onSend={handleSendBlast} onSendPreview={handleSendPreviewBlast} onClose={()=>setShowBlast(null)}/>}
       {showManualOrder && <ManualOrderModal drop={showManualOrder} dropItems={getDropItems(showManualOrder.id)} customers={customers} creator={creator} onSave={handleManualOrder} onClose={()=>setShowManualOrder(null)}/>}
+      {/* v27.1: delete confirmation for archived drops (was previously orphaned state with no render) */}
+      {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>handleDeleteDropPermanently(showDeleteDrop.id)} onClose={()=>setShowDeleteDrop(null)}/>}
     </>
   );
 }
@@ -2544,11 +2585,22 @@ function ManualOrderModal({ drop, dropItems, customers, creator, onSave, onClose
     </div>
   );
 }
-function BlastModal({ drop, customers, getDropOrders, onSend, onClose }) {
+function BlastModal({ drop, creator, customers, getDropOrders, onSend, onSendPreview, onClose }) {
   const [channel, setChannel] = useState("email");
   const [audience, setAudience] = useState("all");
   const [customNote, setCustomNote] = useState("");
   const [sending, setSending] = useState(false);
+  // v27.1: preview state — defaults to creator's own email, editable so creators
+  // can send to a phone-reachable address to preview mobile rendering
+  const [previewEmail, setPreviewEmail] = useState(creator?.email || "");
+  const [sendingPreview, setSendingPreview] = useState(false);
+
+  const handleSendPreviewClick = async () => {
+    if (!previewEmail || !onSendPreview) return;
+    setSendingPreview(true);
+    await onSendPreview({ drop, customNote, previewEmail });
+    setSendingPreview(false);
+  };
 
   const optedIn = customers.filter(c => c.opted_in);
   const orderedCustomerEmails = getDropOrders(drop.id)
@@ -2641,6 +2693,32 @@ function BlastModal({ drop, customers, getDropOrders, onSend, onClose }) {
             📧 The email will include your drop image, items, pickup details, and a direct link to your storefront — all branded as <strong>{drop.title}</strong>.
           </div>
 
+          {/* v27.1: Preview to creator's own inbox before sending to real customers */}
+          {channel === "email" && onSendPreview && (
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",padding:"14px 16px",marginBottom:20}}>
+              <p style={{margin:"0 0 8px",fontSize:13,fontWeight:600,color:"var(--text)"}}>👁 Preview before sending</p>
+              <p style={{margin:"0 0 10px",fontSize:12,color:"var(--text-secondary)",lineHeight:1.5}}>Send yourself a test to see exactly how it'll look in your customers' inbox.</p>
+              <div style={{display:"flex",gap:8}}>
+                <input
+                  className="form-input"
+                  type="email"
+                  placeholder="preview@email.com"
+                  value={previewEmail}
+                  onChange={e=>setPreviewEmail(e.target.value)}
+                  style={{flex:1,fontSize:13,padding:"8px 12px"}}
+                />
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={!previewEmail || sendingPreview || sending}
+                  onClick={handleSendPreviewClick}
+                  style={{whiteSpace:"nowrap"}}>
+                  {sendingPreview ? "Sending..." : "Send preview"}
+                </button>
+              </div>
+              <p style={{margin:"8px 0 0",fontSize:11,color:"var(--text-tertiary)"}}>Previews don't count toward the "Announced" status on this drop.</p>
+            </div>
+          )}
+
           {targetCount === 0 && (
             <div style={{background:"var(--red-light)",color:"var(--red)",borderRadius:"var(--radius-sm)",padding:"10px 14px",marginBottom:16,fontSize:13}}>
               No opted-in customers in this audience. Ask customers to opt in first.
@@ -2652,7 +2730,7 @@ function BlastModal({ drop, customers, getDropOrders, onSend, onClose }) {
             <button
               className="btn btn-primary"
               style={{flex:2}}
-              disabled={sending || targetCount===0 || channel==="sms"}
+              disabled={sending || sendingPreview || targetCount===0 || channel==="sms"}
               onClick={handleSend}>
               {sending ? "Sending..." : `Send to ${targetCount} customer${targetCount!==1?"s":""}`}
             </button>
