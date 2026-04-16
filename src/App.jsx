@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v26 — pickup windows with slot limits.
-//                    Opt-in per drop. Creators configure
-//                    multiple windows, customers pick one at
-//                    checkout, slots enforced at order time.
-//                    Builds on v25.
+// FOODDROP MVP v27a — dashboard calendar view for drops,
+//                     contextual "other drops this month"
+//                     hint in drop form. Pure client-side;
+//                     no SQL or email changes in this slice.
+//                     v27b ships .ics + email polish next.
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -272,6 +272,39 @@ h1{font-family:var(--font-display);font-size:32px;font-weight:600;line-height:1.
 .theme-preview-bar{height:6px;border-radius:3px;margin-top:8px}
 
 .pan-frame{position:relative;overflow:hidden;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:grab;user-select:none;background:var(--surface-alt)}.pan-frame.dragging{cursor:grabbing}.pan-frame img{position:absolute;pointer-events:none;user-select:none}.pan-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .2s}.pan-frame:hover .pan-hint{opacity:1}.pan-hint-inner{background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:5px 14px;border-radius:20px;font-family:var(--font-body)}.pan-size-badge{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.45);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;pointer-events:none;font-family:var(--font-body)}.pan-actions{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}.pan-size-hint{font-size:11px;color:var(--text-tertiary);margin-top:4px}
+
+/* v27a: Drops calendar view */
+.view-toggle{display:inline-flex;background:var(--surface-alt);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px}
+.view-toggle button{background:transparent;border:none;padding:6px 14px;border-radius:5px;font-family:var(--font-body);font-size:13px;font-weight:600;color:var(--text-secondary);cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.view-toggle button.active{background:var(--surface);color:var(--accent);box-shadow:var(--shadow-sm)}
+.cal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding:0 4px}
+.cal-title{font-family:var(--font-display);font-size:22px;font-weight:600;color:var(--text)}
+.cal-nav{display:flex;gap:6px;align-items:center}
+.cal-nav-btn{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;cursor:pointer;color:var(--text-secondary);font-size:14px;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;min-width:32px}
+.cal-nav-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-light)}
+.cal-weekdays{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px;padding:0 4px}
+.cal-weekday{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);text-align:center;padding:6px 0}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;background:var(--surface-alt);border-radius:var(--radius-sm);padding:4px}
+.cal-cell{background:var(--surface);border-radius:6px;min-height:104px;padding:6px 8px;display:flex;flex-direction:column;gap:4px;transition:background .15s}
+.cal-cell.other-month{background:transparent;opacity:.45}
+.cal-cell.today{box-shadow:inset 0 0 0 2px var(--accent)}
+.cal-cell.clickable{cursor:pointer}
+.cal-cell.clickable:hover{background:var(--accent-light)}
+.cal-daynum{font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:2px;display:flex;justify-content:space-between;align-items:center}
+.cal-cell.today .cal-daynum{color:var(--accent)}
+.cal-daynum-plus{font-size:14px;color:var(--text-tertiary);opacity:0;transition:opacity .15s}
+.cal-cell.clickable:hover .cal-daynum-plus{opacity:1}
+.cal-drop-chip{font-size:11px;font-weight:600;padding:3px 7px;border-radius:4px;background:var(--accent-light);color:var(--accent);border-left:3px solid var(--accent);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;justify-content:space-between;align-items:center;gap:4px}
+.cal-drop-chip.ended{background:var(--surface-alt);color:var(--text-tertiary);border-left-color:var(--text-tertiary)}
+.cal-drop-chip:hover{filter:brightness(.95)}
+.cal-drop-chip-count{font-size:10px;font-weight:500;background:rgba(0,0,0,.08);padding:1px 5px;border-radius:8px;flex-shrink:0}
+.cal-more-link{font-size:11px;font-weight:600;color:var(--text-tertiary);cursor:pointer;padding:1px 4px;text-align:left}
+.cal-more-link:hover{color:var(--accent)}
+.cal-more-popover{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);padding:12px;min-width:220px;z-index:50}
+.cal-more-popover-title{font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.3px;margin-bottom:8px}
+.cal-context-hint{background:var(--surface-alt);border-left:3px solid var(--accent);border-radius:4px;padding:8px 10px;margin-top:6px;font-size:12px;color:var(--text-secondary);line-height:1.5}
+.cal-context-hint.warn{background:var(--gold-light);border-left-color:var(--gold);color:var(--text)}
+@media(max-width:640px){.cal-cell{min-height:76px;padding:4px 6px}.cal-drop-chip{font-size:10px;padding:2px 5px}.cal-grid{overflow-x:auto}}
 
 `;
 
@@ -609,6 +642,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [selectedDrop, setSelectedDrop] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showNewDrop, setShowNewDrop] = useState(false);
+  const [prefilledDropDate, setPrefilledDropDate] = useState(null); // v27a: set when creating a drop from calendar click
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
   const [showEditDrop, setShowEditDrop] = useState(null);
@@ -921,15 +955,15 @@ const handleDeleteDropPermanently = async (dropId) => {
       </nav>
       <div className="main-content page-enter" key={tab+(selectedDrop?.id||"")+(selectedCustomer?.id||"")}>
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
-        {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
+        {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onNewOnDate={(date)=>{setPrefilledDropDate(date);setShowNewDrop(true)}} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onMarkPaid={handleMarkPaid} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}} onNewOrder={()=>setShowManualOrder(selectedDrop)}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
         {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} onSaveWelcomeEmail={handleSaveWelcomeEmail} session={session} showToast={showToast}/>}
       </div>
-      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null)}}/>}
-      {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
+      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} prefilledDate={prefilledDropDate} allDrops={drops} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null);setPrefilledDropDate(null)}}/>}
+      {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} allDrops={drops} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
       {showNewCustomer && <CustomerFormModal mode="create" onSave={handleAddCustomer} onClose={()=>setShowNewCustomer(false)}/>}
       {showEditCustomer && <CustomerFormModal mode="edit" customer={showEditCustomer} onSave={d=>handleEditCustomer(showEditCustomer.id,d)} onClose={()=>setShowEditCustomer(null)}/>}
       {showEditProfile && <ProfileFormModal creator={creator} onSave={handleEditProfile} onClose={()=>setShowEditProfile(false)}/>}
@@ -1585,20 +1619,145 @@ function CustomerSummary({ drops, orders, customers, getOrderItems, preset, setP
 // ============================================================
 // DROPS TAB — with archive toggle
 // ============================================================
-function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onArchive, onUnarchive, onDuplicate, onDeletePermanently, onAnnounce }) {
+// v27a: Month-grid calendar view of drops
+function DropsCalendar({ drops, getDropOrders, onSelectDrop, onNewOnDate }) {
+  const [focalMonth, setFocalMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [morePopover, setMorePopover] = useState(null); // { dayKey, drops, x, y }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const monthLabel = focalMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  // Build 6-week grid starting on Sunday of the first week
+  const firstOfMonth = focalMonth;
+  const firstCellDate = new Date(firstOfMonth); firstCellDate.setDate(1 - firstOfMonth.getDay());
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(firstCellDate); d.setDate(firstCellDate.getDate() + i);
+    cells.push(d);
+  }
+
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const dropsByDay = drops.reduce((acc, drop) => {
+    if (!drop.pickup_date) return acc;
+    (acc[drop.pickup_date] ||= []).push(drop);
+    return acc;
+  }, {});
+
+  const goPrev = () => setFocalMonth(new Date(focalMonth.getFullYear(), focalMonth.getMonth()-1, 1));
+  const goNext = () => setFocalMonth(new Date(focalMonth.getFullYear(), focalMonth.getMonth()+1, 1));
+  const goToday = () => { const d = new Date(); setFocalMonth(new Date(d.getFullYear(), d.getMonth(), 1)); };
+
+  const handleMoreClick = (e, dayDrops, dayKey) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMorePopover({ dayKey, drops: dayDrops, x: rect.left, y: rect.bottom + 4 });
+  };
+
+  useEffect(() => {
+    if (!morePopover) return;
+    const close = () => setMorePopover(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [morePopover]);
+
+  return (
+    <div>
+      <div className="cal-header">
+        <div className="cal-title">{monthLabel}</div>
+        <div className="cal-nav">
+          <button className="cal-nav-btn" onClick={goToday} title="Jump to today" style={{fontSize:12,padding:"6px 12px"}}>Today</button>
+          <button className="cal-nav-btn" onClick={goPrev} title="Previous month">‹</button>
+          <button className="cal-nav-btn" onClick={goNext} title="Next month">›</button>
+        </div>
+      </div>
+      <div className="cal-weekdays">
+        {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => <div key={d} className="cal-weekday">{d}</div>)}
+      </div>
+      <div className="cal-grid">
+        {cells.map(cellDate => {
+          const key = ymd(cellDate);
+          const dayDrops = dropsByDay[key] || [];
+          const isOtherMonth = cellDate.getMonth() !== focalMonth.getMonth();
+          const isToday = cellDate.getTime() === today.getTime();
+          const isClickable = !isOtherMonth && dayDrops.length === 0;
+          const visibleDrops = dayDrops.slice(0, 2);
+          const hiddenCount = dayDrops.length - visibleDrops.length;
+          return (
+            <div
+              key={key}
+              className={`cal-cell ${isOtherMonth?"other-month":""} ${isToday?"today":""} ${isClickable?"clickable":""}`}
+              onClick={isClickable ? () => onNewOnDate(key) : undefined}>
+              <div className="cal-daynum">
+                <span>{cellDate.getDate()}</span>
+                {isClickable && <span className="cal-daynum-plus">+</span>}
+              </div>
+              {visibleDrops.map(drop => {
+                const isEnded = drop.status === "ended";
+                const orderCount = getDropOrders(drop.id).filter(o => o.status !== "cancelled").length;
+                return (
+                  <div
+                    key={drop.id}
+                    className={`cal-drop-chip ${isEnded?"ended":""}`}
+                    title={drop.title}
+                    onClick={(e)=>{e.stopPropagation();onSelectDrop(drop);}}>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{drop.title}</span>
+                    {orderCount > 0 && <span className="cal-drop-chip-count">{orderCount}</span>}
+                  </div>
+                );
+              })}
+              {hiddenCount > 0 && (
+                <div className="cal-more-link" onClick={(e)=>handleMoreClick(e, dayDrops, key)}>
+                  +{hiddenCount} more
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {morePopover && (
+        <div className="cal-more-popover" style={{left:morePopover.x, top:morePopover.y}} onClick={e=>e.stopPropagation()}>
+          <div className="cal-more-popover-title">{fmtDate(morePopover.dayKey)}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {morePopover.drops.map(drop => {
+              const orderCount = getDropOrders(drop.id).filter(o => o.status !== "cancelled").length;
+              return (
+                <div
+                  key={drop.id}
+                  className={`cal-drop-chip ${drop.status==="ended"?"ended":""}`}
+                  onClick={()=>{setMorePopover(null);onSelectDrop(drop);}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{drop.title}</span>
+                  {orderCount > 0 && <span className="cal-drop-chip-count">{orderCount}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DropsTab({ drops, getDropItems, getDropOrders, onSelect, onNew, onNewOnDate, onArchive, onUnarchive, onDuplicate, onDeletePermanently, onAnnounce }) {
   const [showArchived, setShowArchived] = useState(false);
+  const [view, setView] = useState("list"); // v27a: "list" | "calendar"
   const visible = showArchived ? drops : drops.filter(d => !d.archived);
   const archivedCount = drops.filter(d => d.archived).length;
 
   return (<>
     <div className="section-header">
       <div><h1>Drops</h1></div>
-      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <div className="view-toggle" role="tablist" aria-label="Drops view">
+          <button className={view==="list"?"active":""} onClick={()=>setView("list")} aria-selected={view==="list"}>☰ List</button>
+          <button className={view==="calendar"?"active":""} onClick={()=>setView("calendar")} aria-selected={view==="calendar"}>🗓 Calendar</button>
+        </div>
         {archivedCount > 0 && <button className="btn btn-ghost btn-sm" onClick={()=>setShowArchived(!showArchived)}>{I.archive} {showArchived ? "Hide" : "Show"} Archived ({archivedCount})</button>}
         <button className="btn btn-primary" onClick={onNew}>{I.plus} New Drop</button>
       </div>
     </div>
-    {visible.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.drop}</div><h3>No drops yet</h3><p style={{marginTop:8}}>Create your first drop to start taking orders.</p></div>):(
+    {view === "calendar" ? (
+      <DropsCalendar drops={visible} getDropOrders={getDropOrders} onSelectDrop={(d)=>!d.archived&&onSelect(d)} onNewOnDate={onNewOnDate}/>
+    ) : visible.length===0?(<div className="empty-state"><div className="empty-state-icon">{I.drop}</div><h3>No drops yet</h3><p style={{marginTop:8}}>Create your first drop to start taking orders.</p></div>):(
       <div style={{display:"grid",gap:16}}>{visible.map(drop=>{const dI=getDropItems(drop.id);const dO=getDropOrders(drop.id);const isArchived=drop.archived;return(<div key={drop.id} className={`card card-hover drop-card ${drop.status==="ended"||isArchived?"drop-card-ended":""}`} style={{opacity:isArchived?.6:1}} onClick={()=>!isArchived&&onSelect(drop)}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div><h3>{drop.title}</h3><p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>{drop.description}</p><div className="drop-meta"><span className="drop-meta-item">{I.clock} {fmtDate(drop.pickup_date)}, {drop.pickup_time}</span><span className="drop-meta-item">{I.pin} {drop.pickup_location}</span></div></div><div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>{isArchived?<><span className="badge badge-archived">Archived</span><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onUnarchive(drop.id)}}>Restore</button><button className="btn btn-danger btn-sm" onClick={e=>{e.stopPropagation();onDeletePermanently(drop)}}>{I.trash} Delete</button></>:<><span className={`badge badge-${drop.status}`}>{drop.status==="active"?"Active":"Ended"}</span>{drop.status==="active"&&(drop.announcement_sent_at?<button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();if(window.confirm(`You already sent an announcement for "${drop.title}" on ${new Date(drop.announcement_sent_at).toLocaleDateString("en-US",{month:"short",day:"numeric"})}${drop.announcement_sent_count>1?` (${drop.announcement_sent_count} times total)`:""}. Send another?`))onAnnounce(drop)}} title={`Sent ${new Date(drop.announcement_sent_at).toLocaleString()}`} style={{color:"var(--text-secondary)"}}>✅ Announced</button>:<button className="btn btn-primary btn-sm" onClick={e=>{e.stopPropagation();onAnnounce(drop)}} title="Announce this drop">📣 Announce</button>)}<button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();onDuplicate(drop)}} title="Duplicate this drop">{I.copy}</button></>}</div></div>{!isArchived&&<><div className="drop-items-preview">{dI.map(item=><span key={item.id} className="drop-item-chip">{item.name} · {fmt(item.price)}</span>)}</div><div style={{marginTop:12,fontSize:14,color:"var(--text-secondary)"}}><strong style={{color:"var(--text)"}}>{dO.length}</strong> order{dO.length!==1?"s":""} · <strong style={{color:"var(--text)"}}>{fmt(dO.reduce((s,o)=>s+Number(o.total),0))}</strong></div></>}</div>)})}</div>
     )}
   </>);
@@ -2676,12 +2835,13 @@ function ImageUpload({ value, onChange, label, frameRatio = "1:1" }) {
 }
 
 // --- Drop Form (create + edit, with images) ---
-function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, onSave, onClose }) {
+function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, prefilledDate, allDrops, onSave, onClose }) {
   const src = drop || duplicateFrom;
   const srcItems = existingItems || duplicateItems;
   const [title, setTitle] = useState(duplicateFrom ? "" : (src?.title || ""));
   const [desc, setDesc] = useState(src?.description || "");
-  const [pickupDate, setPickupDate] = useState(duplicateFrom ? "" : (src?.pickup_date || ""));
+  // v27a: prefilledDate (from calendar click) takes precedence over src date when creating
+  const [pickupDate, setPickupDate] = useState(duplicateFrom ? (prefilledDate || "") : (prefilledDate || src?.pickup_date || ""));
   const [pickupTime, setPickupTime] = useState(src?.pickup_time || "");
   const [pickupLocation, setPickupLocation] = useState(src?.pickup_location || "");
   // v26: pickup windows (opt-in)
@@ -2746,7 +2906,36 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Describe what's in this drop..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
       <ImageUpload value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Drop Cover Image (optional)" frameRatio="2:1"/>
       <div className="form-row">
-        <div className="form-group"><label className="form-label">Pickup Date <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/></div>
+        <div className="form-group">
+          <label className="form-label">Pickup Date <span style={{color:"var(--accent)"}}>*</span></label>
+          <input className="form-input" type="date" value={pickupDate} onChange={e=>setPickupDate(e.target.value)}/>
+          {/* v27a: Contextual awareness — show other drops in the selected month */}
+          {pickupDate && allDrops && (() => {
+            const selected = new Date(pickupDate + "T00:00:00");
+            const selectedYM = `${selected.getFullYear()}-${selected.getMonth()}`;
+            const currentDropId = drop?.id;
+            const sameMonthDrops = allDrops.filter(d => {
+              if (!d.pickup_date || d.archived) return false;
+              if (currentDropId && d.id === currentDropId) return false; // exclude self when editing
+              const dd = new Date(d.pickup_date + "T00:00:00");
+              return `${dd.getFullYear()}-${dd.getMonth()}` === selectedYM;
+            });
+            const sameDayConflict = sameMonthDrops.find(d => d.pickup_date === pickupDate);
+            if (sameDayConflict) {
+              return <div className="cal-context-hint warn">⚠️ You already have a drop on this date: <strong>{sameDayConflict.title}</strong></div>;
+            }
+            if (sameMonthDrops.length > 0) {
+              const monthName = selected.toLocaleDateString("en-US", { month: "long" });
+              const listed = sameMonthDrops.slice(0, 3).map(d => {
+                const dd = new Date(d.pickup_date + "T00:00:00");
+                return `${d.title} (${dd.toLocaleDateString("en-US",{month:"short",day:"numeric"})})`;
+              }).join(", ");
+              const extra = sameMonthDrops.length > 3 ? ` +${sameMonthDrops.length-3} more` : "";
+              return <div className="cal-context-hint">📅 Also in {monthName}: {listed}{extra}</div>;
+            }
+            return null;
+          })()}
+        </div>
         {!useWindows && <div className="form-group"><label className="form-label">Pickup Time <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="5:00 PM – 7:00 PM" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></div>}
       </div>
       <div className="form-group"><label className="form-label">Pickup Location <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder="123 Main St" value={pickupLocation} onChange={e=>setPickupLocation(e.target.value)}/></div>
