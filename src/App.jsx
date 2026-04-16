@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v27a — dashboard calendar view for drops,
-//                     contextual "other drops this month"
-//                     hint in drop form. Pure client-side;
-//                     no SQL or email changes in this slice.
-//                     v27b ships .ics + email polish next.
+// FOODDROP MVP v27b — email polish pass:
+//                     • .ics pickup invite attached to
+//                       confirmation emails (honors windows)
+//                     • drop cover image banner on confirmation
+//                     • announcement email rebranded to match
+//                       welcome email's editorial aesthetic
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -124,6 +125,30 @@ const spanWindows = (windows) => {
   const earliest = sorted[0].start;
   const latest = [...sorted].sort((a,b) => b.end.localeCompare(a.end))[0].end;
   return `${formatTime12(earliest)} – ${formatTime12(latest)}`;
+};
+// v27b: Parse a free-form pickup_time string like "5:00 PM – 7:00 PM" or "5-7pm"
+// into 24h {start, end} for .ics generation. Returns null if unparseable.
+// Used only when a drop doesn't use pickup windows (those already have structured times).
+const parseTimeRange = (str) => {
+  if (!str || typeof str !== "string") return null;
+  const normalized = str.replace(/[–—−]/g, "-");
+  const m = normalized.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/);
+  if (!m) return null;
+  const [, h1, mn1, p1, h2, mn2, p2] = m;
+  const toHM = (h, mn, p, fallbackP) => {
+    let hour = parseInt(h, 10);
+    if (isNaN(hour)) return null;
+    const minute = mn ? parseInt(mn, 10) : 0;
+    const period = (p || fallbackP || "").toUpperCase();
+    if (period === "PM" && hour !== 12) hour += 12;
+    if (period === "AM" && hour === 12) hour = 0;
+    return { h: hour, m: minute };
+  };
+  const end = toHM(h2, mn2, p2, null);
+  const start = toHM(h1, mn1, p1, p2); // inherit period from end if start has none ("5-7pm")
+  if (!start || !end) return null;
+  const fmt = (t) => `${String(t.h).padStart(2,"0")}:${String(t.m).padStart(2,"0")}`;
+  return { start: fmt(start), end: fmt(end) };
 };
 
 // --- Icons ---
@@ -3359,8 +3384,19 @@ function DropOrderPage({ drop, items, creator, customers, orders, onBack, onOrde
     for (const ci of cartItems) { const di = items.find(d => d.id === ci.dropItemId); if (di) await supabase.from("drop_items").update({ claimed: di.claimed + ci.qty }).eq("id", di.id).execute(); }
     const orderDetail = { ...no, items: cartItems.map(ci => { const di = items.find(d => d.id === ci.dropItemId); return { name: di?.name, price: di?.price, qty: ci.qty }; }), drop, customerName: name, customerEmail: email };
 
-    // Send confirmation email (non-blocking)
+    // Send confirmation email (non-blocking) — v27b: expanded payload for .ics + banner
     try {
+      // Derive structured pickup times for .ics generation.
+      // If pickup windows in use, the selected window is authoritative.
+      // Otherwise, try to parse the free-form drop.pickup_time.
+      let pickupStart24h = null, pickupEnd24h = null;
+      if (drop.use_pickup_windows && selectedWindow) {
+        pickupStart24h = selectedWindow.start;
+        pickupEnd24h = selectedWindow.end;
+      } else {
+        const parsed = parseTimeRange(drop.pickup_time);
+        if (parsed) { pickupStart24h = parsed.start; pickupEnd24h = parsed.end; }
+      }
       await fetch("/api/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3369,11 +3405,16 @@ function DropOrderPage({ drop, items, creator, customers, orders, onBack, onOrde
           customerName: name,
           creatorName: creator?.name || "FoodDrop",
           dropTitle: drop.title,
-          pickupDate: fmtDateLong(drop.pickup_date),
+          dropImageUrl: drop.image_url || "",               // v27b: banner
+          pickupDate: fmtDateLong(drop.pickup_date),        // display string
+          pickupDateRaw: drop.pickup_date,                  // v27b: YYYY-MM-DD for .ics
           pickupTime: drop.use_pickup_windows && selectedWindow ? formatWindow(selectedWindow) : drop.pickup_time,
+          pickupStart24h,                                   // v27b: "HH:MM" or null
+          pickupEnd24h,                                     // v27b: "HH:MM" or null
           pickupLocation: drop.pickup_location,
           items: orderDetail.items,
           total: cartTotal,
+          orderId: no.id,                                   // v27b: unique .ics UID
         }),
       });
     } catch (emailErr) { console.error("Email send failed:", emailErr); }
