@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// FOODDROP MVP v27.1 — bug fixes + preview:
-//                      • archived drop Delete button actually
-//                        deletes from the DB (modal was never
-//                        rendered; state was a no-op)
-//                      • view resets cleanly after delete
-//                      • "Send preview to me" button on
-//                        announcement modal — reuses send-blast
-//                        endpoint, doesn't flip the sent indicator
+// FOODDROP MVP v28a — Products tab (creator product library):
+//                     • new products table with CRUD UI
+//                     • tag-based organization, archive/delete
+//                     • per-product capacity_weight column
+//                       staged for v28.1 (pizza throughput)
+//                     • drop_items.product_id added but not
+//                       yet wired — that's v28b's job
 // ============================================================
 
 const SUPABASE_URL = "https://fgkwdobauncgkyuvyfhn.supabase.co";
@@ -425,6 +424,7 @@ export default function FoodDropApp() {
   const [dropItems, setDropItems] = useState([]);
   const [orders, setOrders] = useState([]);
   const [orderItems, setOrderItems] = useState([]);
+  const [products, setProducts] = useState([]); // v28a
   const [loading, setLoading] = useState(true);
   const [dbOk, setDbOk] = useState(null);
   const [toast, setToast] = useState(null);
@@ -489,12 +489,13 @@ const handleLogin = async (email, password) => {
       setCreator(activeCreator);
 
       if (activeCreator) {
-        const [custRes, dropsRes, diRes, ordRes, oiRes] = await Promise.all([
+        const [custRes, dropsRes, diRes, ordRes, oiRes, prodRes] = await Promise.all([
           supabase.from("customers").select("*").eq("creator_id", activeCreator.id).order("created_at", { ascending: false }).execute(),
           supabase.from("drops").select("*").eq("creator_id", activeCreator.id).order("created_at", { ascending: false }).execute(),
           supabase.from("drop_items").select("*").order("sort_order").execute(),
           supabase.from("orders").select("*").order("created_at", { ascending: false }).execute(),
           supabase.from("order_items").select("*").execute(),
+          supabase.from("products").select("*").eq("creator_id", activeCreator.id).order("created_at", { ascending: false }).execute(),
         ]);
         setCustomers(custRes.data || []);
         const creatorDrops = dropsRes.data || [];
@@ -505,8 +506,9 @@ const handleLogin = async (email, password) => {
         setOrders(creatorOrders);
         const orderIds = creatorOrders.map(o => o.id);
         setOrderItems((oiRes.data || []).filter(oi => orderIds.includes(oi.order_id)));
+        setProducts(prodRes.data || []);
       } else {
-        setCustomers([]); setDrops([]); setDropItems([]); setOrders([]); setOrderItems([]);
+        setCustomers([]); setDrops([]); setDropItems([]); setOrders([]); setOrderItems([]); setProducts([]);
       }
       setDbOk(true);
     } catch { setDbOk(false); }
@@ -599,7 +601,7 @@ const handleLogin = async (email, password) => {
     return (
       <><style>{CSS}</style><div className="app">
         {dbOk === false && <div className="connection-banner err">Could not connect to database.<button className="btn btn-sm btn-ghost" onClick={loadData} style={{color:"var(--red)"}}>{I.refresh} Retry</button></div>}
-        <CreatorDashboard creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} showToast={showToast} loadData={loadData} session={session} onLogout={handleLogout}/>
+        <CreatorDashboard creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} products={products} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} showToast={showToast} loadData={loadData} session={session} onLogout={handleLogout}/>
         {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
       </div></>
     );
@@ -664,10 +666,14 @@ function LandingPage() {
 // ============================================================
 // CREATOR DASHBOARD
 // ============================================================
-function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropItems, getDropItems, getDropOrders, getOrderItems, showToast, loadData, session, onLogout }) {
+function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropItems, products, getDropItems, getDropOrders, getOrderItems, showToast, loadData, session, onLogout }) {
   const [tab, setTab] = useState("dashboard");
   const [selectedDrop, setSelectedDrop] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
+  // v28a: Products tab state
+  const [showNewProduct, setShowNewProduct] = useState(false);
+  const [showEditProduct, setShowEditProduct] = useState(null); // product object
+  const [showDeleteProduct, setShowDeleteProduct] = useState(null); // product object
   const [showNewDrop, setShowNewDrop] = useState(false);
   const [prefilledDropDate, setPrefilledDropDate] = useState(null); // v27a: set when creating a drop from calendar click
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -948,6 +954,48 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const handleArchiveDrop = async (id) => { await supabase.from("drops").update({ archived: true }).eq("id", id).execute(); showToast("Drop archived."); setSelectedDrop(null); loadData(); };
   const handleUnarchiveDrop = async (id) => { await supabase.from("drops").update({ archived: false }).eq("id", id).execute(); showToast("Drop restored."); loadData(); };
 
+  // v28a: Product CRUD
+  const handleCreateProduct = async (d) => {
+    if (!creator) return;
+    const { error } = await supabase.from("products").insert({
+      creator_id: creator.id,
+      name: d.name,
+      description: d.description || "",
+      price: parseFloat(d.price) || 0,
+      image_url: d.imageUrl || "",
+      image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null,
+      sku: d.sku || "",
+      tags: d.tags || [],
+      capacity_weight: parseFloat(d.capacityWeight) || 1,
+    }).execute();
+    if (error) { showToast("Failed to create product.", "error"); return; }
+    setShowNewProduct(false); showToast(`"${d.name}" added to products.`); loadData();
+  };
+  const handleEditProduct = async (id, d) => {
+    const { error } = await supabase.from("products").update({
+      name: d.name,
+      description: d.description || "",
+      price: parseFloat(d.price) || 0,
+      image_url: d.imageUrl || "",
+      image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null,
+      sku: d.sku || "",
+      tags: d.tags || [],
+      capacity_weight: parseFloat(d.capacityWeight) || 1,
+    }).eq("id", id).execute();
+    if (error) { showToast("Failed to update product.", "error"); return; }
+    setShowEditProduct(null); showToast("Product updated."); loadData();
+  };
+  const handleArchiveProduct = async (id) => { await supabase.from("products").update({ archived: true }).eq("id", id).execute(); showToast("Product archived."); loadData(); };
+  const handleUnarchiveProduct = async (id) => { await supabase.from("products").update({ archived: false }).eq("id", id).execute(); showToast("Product restored."); loadData(); };
+  const handleDeleteProductPermanently = async (productId) => {
+    // drop_items.product_id is ON DELETE SET NULL so existing drops/items survive
+    const { error } = await supabase.from("products").delete().eq("id", productId).execute();
+    if (error) { showToast("Delete failed — check Supabase RLS policies.", "error"); return; }
+    setShowDeleteProduct(null);
+    showToast("Product permanently deleted.");
+    loadData();
+  };
+
 const handleDeleteDropPermanently = async (dropId) => {
     // Delete in order: order_items → orders → drop_items → drop
     const dropOrderIds = orders.filter(o => o.drop_id === dropId).map(o => o.id);
@@ -1013,7 +1061,7 @@ const handleDeleteDropPermanently = async (dropId) => {
     <>
       <div className="creator-topbar"><span className="creator-topbar-brand">🍽️ FoodDrop</span><div className="creator-topbar-actions"><button className="creator-topbar-link" onClick={copyUrl}>{I.share} Copy Customer Link</button><a className="creator-topbar-link" href={customerUrl} target="_blank" rel="noopener noreferrer">{I.eye} View Page</a><button className="creator-topbar-link" onClick={onLogout}>Log Out</button></div></div>
       <nav className="creator-nav">
-        {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"customers",label:"Customers",icon:I.users},{key:"reports",label:"Reports",icon:I.chart},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
+        {[{key:"dashboard",label:"Dashboard",icon:I.home},{key:"drops",label:"Drops",icon:I.drop},{key:"products",label:"Products",icon:I.image},{key:"customers",label:"Customers",icon:I.users},{key:"reports",label:"Reports",icon:I.chart},{key:"settings",label:"Settings",icon:I.settings}].map(t=>(
           <button key={t.key} className={tab===t.key?"active":""} onClick={()=>{setTab(t.key);setSelectedDrop(null);setSelectedCustomer(null)}}>{t.icon} {t.label}</button>
         ))}
       </nav>
@@ -1021,6 +1069,7 @@ const handleDeleteDropPermanently = async (dropId) => {
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onNewOnDate={(date)=>{setPrefilledDropDate(date);setShowNewDrop(true)}} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onMarkPaid={handleMarkPaid} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}} onNewOrder={()=>setShowManualOrder(selectedDrop)}/>}
+        {tab==="products" && <ProductsTab products={products} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
@@ -1039,6 +1088,10 @@ const handleDeleteDropPermanently = async (dropId) => {
       {showManualOrder && <ManualOrderModal drop={showManualOrder} dropItems={getDropItems(showManualOrder.id)} customers={customers} creator={creator} onSave={handleManualOrder} onClose={()=>setShowManualOrder(null)}/>}
       {/* v27.1: delete confirmation for archived drops (was previously orphaned state with no render) */}
       {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>handleDeleteDropPermanently(showDeleteDrop.id)} onClose={()=>setShowDeleteDrop(null)}/>}
+      {/* v28a: product modals */}
+      {showNewProduct && <ProductFormModal mode="create" onSave={handleCreateProduct} onClose={()=>setShowNewProduct(false)}/>}
+      {showEditProduct && <ProductFormModal mode="edit" product={showEditProduct} onSave={(d)=>handleEditProduct(showEditProduct.id, d)} onClose={()=>setShowEditProduct(null)}/>}
+      {showDeleteProduct && <PermanentDeleteProductModal product={showDeleteProduct} onConfirm={()=>handleDeleteProductPermanently(showDeleteProduct.id)} onClose={()=>setShowDeleteProduct(null)}/>}
     </>
   );
 }
@@ -1957,6 +2010,119 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
 // ============================================================
 // CUSTOMERS TAB + DETAIL — Enhanced CRM v7
 // ============================================================
+// ============================================================
+// v28a: PRODUCTS TAB — creator product library
+// ============================================================
+function ProductsTab({ products, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently }) {
+  const [showArchived, setShowArchived] = useState(false);
+  const [search, setSearch] = useState("");
+  const [activeTag, setActiveTag] = useState(null);
+
+  const visible = products.filter(p => {
+    if (!showArchived && p.archived) return false;
+    if (activeTag && !(p.tags || []).includes(activeTag)) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      return p.name.toLowerCase().includes(s) || (p.description || "").toLowerCase().includes(s) || (p.sku || "").toLowerCase().includes(s);
+    }
+    return true;
+  });
+
+  const archivedCount = products.filter(p => p.archived).length;
+  // Gather all distinct tags across visible-ish products (include archived if showing)
+  const allTags = [...new Set(products.flatMap(p => p.tags || []))].sort();
+
+  return (<>
+    <div className="section-header">
+      <div>
+        <h1>Products</h1>
+        <p style={{color:"var(--text-secondary)",fontSize:14,marginTop:4}}>Your reusable product library. Pull from here when building drops.</p>
+      </div>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        {archivedCount > 0 && <button className="btn btn-ghost btn-sm" onClick={()=>setShowArchived(!showArchived)}>{I.archive} {showArchived ? "Hide" : "Show"} Archived ({archivedCount})</button>}
+        <button className="btn btn-primary" onClick={onNew}>{I.plus} New Product</button>
+      </div>
+    </div>
+
+    {products.length > 0 && (
+      <div style={{marginBottom:16,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+        <div className="search-bar" style={{flex:"1 1 240px",maxWidth:320,marginBottom:0}}>
+          {I.search}
+          <input placeholder="Search products..." value={search} onChange={e=>setSearch(e.target.value)}/>
+        </div>
+        {allTags.length > 0 && (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+            <button
+              className="drop-item-chip"
+              onClick={()=>setActiveTag(null)}
+              style={{cursor:"pointer",background:activeTag===null?"var(--accent-light)":"var(--surface-alt)",color:activeTag===null?"var(--accent)":"var(--text-secondary)",borderColor:activeTag===null?"var(--accent)":"var(--border)"}}>
+              All
+            </button>
+            {allTags.map(t => (
+              <button
+                key={t}
+                className="drop-item-chip"
+                onClick={()=>setActiveTag(activeTag===t?null:t)}
+                style={{cursor:"pointer",background:activeTag===t?"var(--accent-light)":"var(--surface-alt)",color:activeTag===t?"var(--accent)":"var(--text-secondary)",borderColor:activeTag===t?"var(--accent)":"var(--border)"}}>
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
+    {products.length === 0 ? (
+      <div className="empty-state">
+        <div className="empty-state-icon">{I.image}</div>
+        <h3>No products yet</h3>
+        <p style={{marginTop:8,maxWidth:420,margin:"8px auto 0"}}>Add your signature items here to reuse them across drops — name, photo, price, and description stay ready to pull in.</p>
+      </div>
+    ) : visible.length === 0 ? (
+      <div className="empty-state">
+        <p>No products match your filters.</p>
+      </div>
+    ) : (
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+        {visible.map(product => {
+          const isArchived = product.archived;
+          const pos = product.image_data ? `${product.image_data.x}% ${product.image_data.y}%` : "50% 50%";
+          return (
+            <div key={product.id} className="card card-hover" style={{opacity:isArchived?.6:1,padding:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+              <div style={{height:140,background:product.image_url?`url(${product.image_url})`:"var(--surface-alt)",backgroundSize:"cover",backgroundPosition:pos,position:"relative"}}>
+                {!product.image_url && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-tertiary)"}}>{I.image}</div>}
+                {isArchived && <span className="badge badge-archived" style={{position:"absolute",top:10,right:10}}>Archived</span>}
+              </div>
+              <div style={{padding:16,flex:1,display:"flex",flexDirection:"column"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+                  <h3 style={{margin:0,lineHeight:1.3}}>{product.name}</h3>
+                  <span style={{fontWeight:600,whiteSpace:"nowrap",color:"var(--accent)"}}>{fmt(product.price)}</span>
+                </div>
+                {product.description && <p style={{color:"var(--text-secondary)",fontSize:13,margin:"4px 0 8px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{product.description}</p>}
+                {(product.tags || []).length > 0 && (
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+                    {(product.tags || []).slice(0,3).map(t=><span key={t} className="drop-item-chip" style={{fontSize:11,padding:"3px 9px"}}>{t}</span>)}
+                  </div>
+                )}
+                {product.sku && <div style={{fontSize:11,color:"var(--text-tertiary)",marginBottom:8}}>SKU: {product.sku}</div>}
+                <div style={{marginTop:"auto",display:"flex",gap:6,flexWrap:"wrap",paddingTop:8,borderTop:"1px solid var(--border)"}}>
+                  {isArchived ? (<>
+                    <button className="btn btn-ghost btn-sm" onClick={()=>onUnarchive(product.id)}>Restore</button>
+                    <button className="btn btn-danger btn-sm" onClick={()=>onDeletePermanently(product)}>{I.trash} Delete</button>
+                  </>) : (<>
+                    <button className="btn btn-secondary btn-sm" onClick={()=>onEdit(product)}>{I.edit} Edit</button>
+                    <button className="btn btn-ghost btn-sm" onClick={()=>onArchive(product.id)}>{I.archive} Archive</button>
+                  </>)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </>);
+}
+
 function CustomersTab({ customers, orders, drops, getDropOrders, onAddCustomer, onCompose, onSelectCustomer, onImport, onBulkDelete }) {
   const [copied, setCopied] = useState(null);
   const [search, setSearch] = useState("");
@@ -2401,6 +2567,68 @@ function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
         <button className="btn btn-danger" disabled={!choice} onClick={()=>onConfirm(choice==="delete")}>Delete {count} Customer{count!==1?"s":""}</button>
+      </div>
+    </div></div>
+  );
+}
+
+// v28a: Product form (create or edit)
+function ProductFormModal({ mode, product, onSave, onClose }) {
+  const [name, setName] = useState(product?.name || "");
+  const [desc, setDesc] = useState(product?.description || "");
+  const [price, setPrice] = useState(product?.price != null ? String(product.price) : "");
+  const [sku, setSku] = useState(product?.sku || "");
+  const [capacityWeight, setCapacityWeight] = useState(product?.capacity_weight != null ? String(product.capacity_weight) : "1");
+  const [imageUrl, setImageUrl] = useState(product?.image_data?.url || product?.image_url || "");
+  const [imagePan, setImagePan] = useState({ x: product?.image_data?.x ?? 50, y: product?.image_data?.y ?? 50 });
+  const [tagsInput, setTagsInput] = useState((product?.tags || []).join(", "));
+  const [saving, setSaving] = useState(false);
+
+  const canSave = name && price && !saving;
+  const handleSave = async () => {
+    setSaving(true);
+    const tags = tagsInput.split(",").map(t => t.trim()).filter(Boolean);
+    await onSave({ name, description: desc, price, sku, capacityWeight, imageUrl, imagePan, tags });
+    setSaving(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-header"><h2>{mode==="edit"?"Edit Product":"New Product"}</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <div className="form-group"><label className="form-label">Name <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" placeholder='e.g., "Margherita Pizza"' value={name} onChange={e=>setName(e.target.value)}/></div>
+      <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Ingredients, allergens, serving size..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
+      <ImageUploadWithPan value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Product Image (optional)" frameRatio="1:1"/>
+      <div className="form-row">
+        <div className="form-group"><label className="form-label">Default Price <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="number" step="0.01" min="0" placeholder="12.00" value={price} onChange={e=>setPrice(e.target.value)}/><div className="form-hint">Editable per drop</div></div>
+        <div className="form-group"><label className="form-label">SKU</label><input className="form-input" placeholder="Optional — your own identifier" value={sku} onChange={e=>setSku(e.target.value)}/></div>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Tags</label>
+        <input className="form-input" placeholder="pizza, vegetarian, signature" value={tagsInput} onChange={e=>setTagsInput(e.target.value)}/>
+        <div className="form-hint">Comma-separated. Used to organize your catalog.</div>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Capacity Weight</label>
+        <input className="form-input" type="number" step="0.1" min="0" placeholder="1" value={capacityWeight} onChange={e=>setCapacityWeight(e.target.value)}/>
+        <div className="form-hint">Advanced: units of pickup-window capacity one of these consumes. Leave at 1 unless you're modeling production throughput (coming soon in drops).</div>
+      </div>
+      <p style={{fontSize:12,color:"var(--text-tertiary)",margin:"0 0 10px",textAlign:"center"}}><span style={{color:"var(--accent)"}}>*</span> Required fields</p>
+      <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Product")}</button>
+    </div></div>
+  );
+}
+
+// v28a: Permanent delete for products
+function PermanentDeleteProductModal({ product, onConfirm, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-header"><h2 style={{color:"var(--red)"}}>Permanently Delete Product?</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <p style={{fontSize:15,marginBottom:12}}>You are about to permanently delete <strong>"{product.name}"</strong>.</p>
+      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:20,lineHeight:1.8}}>Existing drops that used this product will keep their menu items intact — only the canonical product entry is removed. If you want to hide it without affecting anything, archive instead.</p>
+      <div style={{padding:"12px 16px",background:"var(--red-light)",borderRadius:"var(--radius-sm)",fontSize:13,color:"var(--red)",fontWeight:500,marginBottom:24}}>⚠️ This cannot be undone.</div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn btn-danger" onClick={onConfirm}>{I.trash} Delete Permanently</button>
       </div>
     </div></div>
   );
