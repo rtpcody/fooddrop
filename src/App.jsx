@@ -2549,21 +2549,24 @@ function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
   const [step, setStep] = useState("warn"); // warn → choose
   const [choice, setChoice] = useState(null); // "keep" | "delete"
 
-  function PermanentDeleteDropModal({ drop, onConfirm, onClose }) {
-  return (
+  if (step === "warn") return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-header"><h2 style={{color:"var(--red)"}}>Permanently Delete Drop?</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
-      <p style={{fontSize:15,marginBottom:12}}>You are about to permanently delete <strong>"{drop.title}"</strong>.</p>
-      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:8}}>This will delete:</p>
-      <ul style={{fontSize:14,color:"var(--text-secondary)",paddingLeft:20,marginBottom:20,lineHeight:1.8}}>
-        <li>The drop and all menu items</li>
-        <li>All orders and order items for this drop</li>
-        <li>This drop's revenue data</li>
-      </ul>
-      <div style={{padding:"12px 16px",background:"var(--red-light)",borderRadius:"var(--radius-sm)",fontSize:13,color:"var(--red)",fontWeight:500,marginBottom:24}}>⚠️ This cannot be undone.</div>
+      <div className="modal-header"><h2 style={{color:"var(--red)"}}>Delete {count} Customer{count!==1?"s":""}?</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <p style={{fontSize:15,marginBottom:20}}>This will permanently remove <strong>{count} customer{count!==1?"s":""}</strong> from your database. This cannot be undone.</p>
+      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:24}}>What should happen to their order history?</p>
+      <div style={{display:"grid",gap:10,marginBottom:24}}>
+        <label style={{display:"flex",alignItems:"flex-start",gap:12,padding:"14px 16px",border:`2px solid ${choice==="keep"?"var(--accent)":"var(--border)"}`,borderRadius:"var(--radius-sm)",cursor:"pointer",background:choice==="keep"?"var(--accent-light)":"var(--surface)"}} onClick={()=>setChoice("keep")}>
+          <input type="radio" checked={choice==="keep"} onChange={()=>setChoice("keep")} style={{marginTop:2,accentColor:"var(--accent)"}}/>
+          <div><div style={{fontWeight:600}}>Keep order history</div><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>Past orders remain in drop records as guest orders. Revenue data is preserved.</div></div>
+        </label>
+        <label style={{display:"flex",alignItems:"flex-start",gap:12,padding:"14px 16px",border:`2px solid ${choice==="delete"?"var(--red)":"var(--border)"}`,borderRadius:"var(--radius-sm)",cursor:"pointer",background:choice==="delete"?"var(--red-light)":"var(--surface)"}} onClick={()=>setChoice("delete")}>
+          <input type="radio" checked={choice==="delete"} onChange={()=>setChoice("delete")} style={{marginTop:2,accentColor:"var(--red)"}}/>
+          <div><div style={{fontWeight:600,color:"var(--red)"}}>Delete everything</div><div style={{fontSize:13,color:"var(--text-secondary)",marginTop:2}}>Customer records and all associated orders are permanently deleted. Revenue data will change.</div></div>
+        </label>
+      </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
         <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-        <button className="btn btn-danger" onClick={onConfirm}>{I.trash} Delete Permanently</button>
+        <button className="btn btn-danger" disabled={!choice} onClick={()=>onConfirm(choice==="delete")}>Delete {count} Customer{count!==1?"s":""}</button>
       </div>
     </div></div>
   );
