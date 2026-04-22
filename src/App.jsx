@@ -973,7 +973,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null,
       sku: d.sku || "",
       tags: d.tags || [],
-      capacity_weight: parseFloat(d.capacityWeight) || 1,
+      capacity_weight: 1,
     }).execute();
     if (error) { showToast("Failed to create product.", "error"); return; }
     setShowNewProduct(false); showToast(`"${d.name}" added to products.`); loadData();
@@ -987,7 +987,6 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null,
       sku: d.sku || "",
       tags: d.tags || [],
-      capacity_weight: parseFloat(d.capacityWeight) || 1,
     }).eq("id", id).execute();
     if (error) { showToast("Failed to update product.", "error"); return; }
     setShowEditProduct(null); showToast("Product updated."); loadData();
@@ -1096,8 +1095,8 @@ const handleDeleteDropPermanently = async (dropId) => {
       {/* v27.1: delete confirmation for archived drops (was previously orphaned state with no render) */}
       {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>handleDeleteDropPermanently(showDeleteDrop.id)} onClose={()=>setShowDeleteDrop(null)}/>}
       {/* v28a: product modals */}
-      {showNewProduct && <ProductFormModal mode="create" onSave={handleCreateProduct} onClose={()=>setShowNewProduct(false)}/>}
-      {showEditProduct && <ProductFormModal mode="edit" product={showEditProduct} onSave={(d)=>handleEditProduct(showEditProduct.id, d)} onClose={()=>setShowEditProduct(null)}/>}
+      {showNewProduct && <ProductFormModal mode="create" onSave={handleCreateProduct} onClose={()=>setShowNewProduct(false)} allExistingTags={[...new Set(products.flatMap(p=>p.tags||[]))].sort()}/>}
+      {showEditProduct && <ProductFormModal mode="edit" product={showEditProduct} onSave={(d)=>handleEditProduct(showEditProduct.id,d)} onClose={()=>setShowEditProduct(null)} allExistingTags={[...new Set(products.flatMap(p=>p.tags||[]))].sort()} onArchive={()=>{handleArchiveProduct(showEditProduct.id);setShowEditProduct(null);}} onUnarchive={()=>{handleUnarchiveProduct(showEditProduct.id);setShowEditProduct(null);}} onDelete={()=>{setShowDeleteProduct(showEditProduct);setShowEditProduct(null);}}/>}
       {showDeleteProduct && <PermanentDeleteProductModal product={showDeleteProduct} onConfirm={()=>handleDeleteProductPermanently(showDeleteProduct.id)} onClose={()=>setShowDeleteProduct(null)}/>}
     </>
   );
@@ -2090,40 +2089,26 @@ function ProductsTab({ products, dropItems, onNew, onEdit, onArchive, onUnarchiv
         <p>No products match your filters.</p>
       </div>
     ) : (
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {visible.map(product => {
           const isArchived = product.archived;
           const pos = product.image_data ? `${product.image_data.x}% ${product.image_data.y}%` : "50% 50%";
           return (
-            <div key={product.id} className="card card-hover" style={{opacity:isArchived?.6:1,padding:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-              <div style={{height:140,background:product.image_url?`url(${product.image_url})`:"var(--surface-alt)",backgroundSize:"cover",backgroundPosition:pos,position:"relative"}}>
-                {!product.image_url && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-tertiary)"}}>{I.image}</div>}
-                {isArchived && <span className="badge badge-archived" style={{position:"absolute",top:10,right:10}}>Archived</span>}
-              </div>
-              <div style={{padding:16,flex:1,display:"flex",flexDirection:"column"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
-                  <h3 style={{margin:0,lineHeight:1.3}}>{product.name}</h3>
-                  <span style={{fontWeight:600,whiteSpace:"nowrap",color:"var(--accent)"}}>{fmt(product.price)}</span>
+            <div key={product.id} className="card card-hover" onClick={()=>onEdit(product)} style={{opacity:isArchived?.6:1,padding:"12px 16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                  <span style={{fontWeight:600,fontSize:14,color:"var(--text)"}}>{product.name}</span>
+                  {isArchived && <span className="badge badge-archived" style={{fontSize:11}}>Archived</span>}
                 </div>
-                {product.description && <p style={{color:"var(--text-secondary)",fontSize:13,margin:"4px 0 8px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{product.description}</p>}
-                {(product.tags || []).length > 0 && (
-                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
-                    {(product.tags || []).slice(0,3).map(t=><span key={t} className="drop-item-chip" style={{fontSize:11,padding:"3px 9px"}}>{t}</span>)}
+                <div style={{fontSize:13,fontWeight:600,color:"var(--accent)"}}>{fmt(product.price)}</div>
+                {(product.tags||[]).length > 0 && (
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:6}}>
+                    {(product.tags||[]).slice(0,5).map(t=><span key={t} className="drop-item-chip" style={{fontSize:11,padding:"2px 8px"}}>{t}</span>)}
                   </div>
                 )}
-                {product.sku && <div style={{fontSize:11,color:"var(--text-tertiary)",marginBottom:8}}>SKU: {product.sku}</div>}
-                <div style={{marginTop:"auto",fontSize:12,color:"var(--text-tertiary)",paddingTop:8,borderTop:"1px solid var(--border)",marginBottom:6}}>
-                  {(()=>{const n=[...new Set((dropItems||[]).filter(di=>di.product_id===product.id).map(di=>di.drop_id))].length;return n>0?`Used in ${n} drop${n!==1?"s":""}`:"Not used in any drops yet";})()}
-                </div>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                  {isArchived ? (<>
-                    <button className="btn btn-ghost btn-sm" onClick={()=>onUnarchive(product.id)}>Restore</button>
-                    <button className="btn btn-danger btn-sm" onClick={()=>onDeletePermanently(product)}>{I.trash} Delete</button>
-                  </>) : (<>
-                    <button className="btn btn-secondary btn-sm" onClick={()=>onEdit(product)}>{I.edit} Edit</button>
-                    <button className="btn btn-ghost btn-sm" onClick={()=>onArchive(product.id)}>{I.archive} Archive</button>
-                  </>)}
-                </div>
+              </div>
+              <div style={{width:52,height:52,flexShrink:0,borderRadius:"var(--radius-sm)",overflow:"hidden",background:product.image_url?`url(${product.image_url})`:"var(--surface-alt)",backgroundSize:"cover",backgroundPosition:pos,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-tertiary)"}}>
+                {!product.image_url && I.image}
               </div>
             </div>
           );
@@ -2583,24 +2568,29 @@ function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
 }
 
 // v28a: Product form (create or edit)
-function ProductFormModal({ mode, product, onSave, onClose }) {
+function ProductFormModal({ mode, product, onSave, onClose, allExistingTags, onArchive, onUnarchive, onDelete }) {
   const [name, setName] = useState(product?.name || "");
   const [desc, setDesc] = useState(product?.description || "");
   const [price, setPrice] = useState(product?.price != null ? String(product.price) : "");
   const [sku, setSku] = useState(product?.sku || "");
-  const [capacityWeight, setCapacityWeight] = useState(product?.capacity_weight != null ? String(product.capacity_weight) : "1");
   const [imageUrl, setImageUrl] = useState(product?.image_data?.url || product?.image_url || "");
   const [imagePan, setImagePan] = useState({ x: product?.image_data?.x ?? 50, y: product?.image_data?.y ?? 50 });
-  const [tagsInput, setTagsInput] = useState((product?.tags || []).join(", "));
+  const [tags, setTags] = useState(product?.tags || []);
+  const [tagQuery, setTagQuery] = useState("");
+  const [tagAcOpen, setTagAcOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const canSave = name && price && !saving;
   const handleSave = async () => {
     setSaving(true);
-    const tags = tagsInput.split(",").map(t => t.trim()).filter(Boolean);
-    await onSave({ name, description: desc, price, sku, capacityWeight, imageUrl, imagePan, tags });
+    await onSave({ name, description: desc, price, sku, imageUrl, imagePan, tags });
     setSaving(false);
   };
+
+  const addTag = (t) => { const tr = t.trim(); if (tr && !tags.includes(tr)) setTags(prev=>[...prev,tr]); setTagQuery(""); };
+  const removeTag = (t) => setTags(tags.filter(x=>x!==t));
+  const tagSuggestions = (allExistingTags||[]).filter(t=>!tags.includes(t)&&(tagQuery===""||t.toLowerCase().includes(tagQuery.toLowerCase())));
+  const showAddNew = tagQuery.trim().length>0 && !(allExistingTags||[]).some(t=>t.toLowerCase()===tagQuery.trim().toLowerCase()) && !tags.includes(tagQuery.trim());
 
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
@@ -2609,21 +2599,60 @@ function ProductFormModal({ mode, product, onSave, onClose }) {
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Ingredients, allergens, serving size..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
       <ImageUploadWithPan value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Product Image (optional)" frameRatio="1:1"/>
       <div className="form-row">
-        <div className="form-group"><label className="form-label">Default Price <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="number" step="0.01" min="0" placeholder="12.00" value={price} onChange={e=>setPrice(e.target.value)}/><div className="form-hint">Editable per drop</div></div>
+        <div className="form-group">
+          <label className="form-label">Price <span style={{color:"var(--accent)"}}>*</span></label>
+          <div style={{position:"relative"}}>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"var(--text-secondary)",pointerEvents:"none",fontSize:14}}>$</span>
+            <input className="form-input" type="number" step="0.01" min="0" placeholder="12.00" value={price} onChange={e=>setPrice(e.target.value)} style={{paddingLeft:26}}/>
+          </div>
+          <div className="form-hint">Editable per drop</div>
+        </div>
         <div className="form-group"><label className="form-label">SKU</label><input className="form-input" placeholder="Optional — your own identifier" value={sku} onChange={e=>setSku(e.target.value)}/></div>
       </div>
       <div className="form-group">
         <label className="form-label">Tags</label>
-        <input className="form-input" placeholder="pizza, vegetarian, signature" value={tagsInput} onChange={e=>setTagsInput(e.target.value)}/>
-        <div className="form-hint">Comma-separated. Used to organize your catalog.</div>
-      </div>
-      <div className="form-group">
-        <label className="form-label">Capacity Weight</label>
-        <input className="form-input" type="number" step="0.1" min="0" placeholder="1" value={capacityWeight} onChange={e=>setCapacityWeight(e.target.value)}/>
-        <div className="form-hint">Advanced: units of pickup-window capacity one of these consumes. Leave at 1 unless you're modeling production throughput (coming soon in drops).</div>
+        {tags.length > 0 && (
+          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+            {tags.map(t=>(
+              <span key={t} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",background:"var(--accent-light)",color:"var(--accent)",borderRadius:"var(--radius-sm)",fontSize:12,fontWeight:500}}>
+                {t}
+                <button onClick={()=>removeTag(t)} style={{background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1,color:"var(--accent)",fontSize:14,marginLeft:2}}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{position:"relative"}}>
+          <input
+            className="form-input"
+            placeholder="Type a tag and press Enter…"
+            value={tagQuery}
+            onChange={e=>setTagQuery(e.target.value)}
+            onFocus={()=>setTagAcOpen(true)}
+            onBlur={()=>setTimeout(()=>setTagAcOpen(false),150)}
+            onKeyDown={e=>{if((e.key==="Enter"||e.key===",")&&tagQuery.trim()){e.preventDefault();addTag(tagQuery);}}}
+          />
+          {tagAcOpen&&(tagSuggestions.length>0||showAddNew)&&(
+            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",boxShadow:"var(--shadow-lg)",maxHeight:180,overflowY:"auto",marginTop:2}}>
+              {tagSuggestions.map(t=>(
+                <button key={t} onMouseDown={e=>e.preventDefault()} onClick={()=>addTag(t)} style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",background:"none",border:"none",borderBottom:"1px solid var(--border)",cursor:"pointer",fontSize:13}} onMouseOver={e=>e.currentTarget.style.background="var(--surface-alt)"} onMouseOut={e=>e.currentTarget.style.background="none"}>{t}</button>
+              ))}
+              {showAddNew&&(<button onMouseDown={e=>e.preventDefault()} onClick={()=>addTag(tagQuery)} style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontWeight:600,fontSize:13}}>+ Add "{tagQuery.trim()}"</button>)}
+            </div>
+          )}
+        </div>
+        <div className="form-hint">Organize your catalog with tags.</div>
       </div>
       <p style={{fontSize:12,color:"var(--text-tertiary)",margin:"0 0 10px",textAlign:"center"}}><span style={{color:"var(--accent)"}}>*</span> Required fields</p>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Product")}</button>
+      {mode==="edit"&&(
+        <div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--border)",display:"flex",gap:8,justifyContent:"flex-end"}}>
+          {product?.archived
+            ? <button className="btn btn-ghost btn-sm" onMouseDown={e=>e.preventDefault()} onClick={onUnarchive}>Restore from Archive</button>
+            : <button className="btn btn-ghost btn-sm" onMouseDown={e=>e.preventDefault()} onClick={onArchive}>{I.archive} Archive</button>
+          }
+          <button className="btn btn-danger btn-sm" onMouseDown={e=>e.preventDefault()} onClick={onDelete}>{I.trash} Delete</button>
+        </div>
+      )}
     </div></div>
   );
 }
