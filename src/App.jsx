@@ -694,7 +694,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     if (!creator) return;
     const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null, use_pickup_windows: !!d.useWindows, pickup_windows: d.useWindows ? d.pickupWindows : null }).select("*").single().execute();
     if (error || !nd) { showToast("Failed to create drop", "error"); return; }
-    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null }))).execute();
+    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null, product_id: item.productId || null, capacity_weight: parseFloat(item.capacityWeight) || 1 }))).execute();
     setShowNewDrop(false); setDuplicateDrop(null); showToast("Drop created!"); loadData();
   };
 
@@ -703,15 +703,22 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     for (const item of items) {
       const imgData = item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null;
       if (item.existingId) {
-        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "", image_data: imgData }).eq("id", item.existingId).execute();
+        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "", image_data: imgData, product_id: item.productId || null, capacity_weight: parseFloat(item.capacityWeight) || 1 }).eq("id", item.existingId).execute();
       } else {
-        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "", image_data: imgData }).execute();
+        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "", image_data: imgData, product_id: item.productId || null, capacity_weight: parseFloat(item.capacityWeight) || 1 }).execute();
       }
     }
     setShowEditDrop(null); showToast("Drop updated!"); loadData();
   };
 
   const handleAddCustomer = async (d) => { if (!creator) return; await supabase.from("customers").insert({ creator_id: creator.id, name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).execute(); setShowNewCustomer(false); showToast(`${d.name} added.`); loadData(); };
+  const handleCreateProductFromDrop = async (name) => {
+    if (!creator) return null;
+    const { data, error } = await supabase.from("products").insert({ creator_id: creator.id, name, description: "", price: 0, image_url: "", image_data: null, sku: "", tags: [], capacity_weight: 1, archived: false }).select("*").single().execute();
+    if (error || !data) { showToast("Failed to create product.", "error"); return null; }
+    loadData();
+    return data;
+  };
   const handleEditCustomer = async (custId, d) => { await supabase.from("customers").update({ name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).eq("id", custId).execute(); setShowEditCustomer(null); setSelectedCustomer(null); showToast("Customer updated."); loadData(); };
   const handleDeleteCustomer = async (custId, custName) => { await supabase.from("customers").delete().eq("id", custId).execute(); setSelectedCustomer(null); showToast(`${custName} removed.`); loadData(); };
 
@@ -1069,14 +1076,14 @@ const handleDeleteDropPermanently = async (dropId) => {
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onNewOnDate={(date)=>{setPrefilledDropDate(date);setShowNewDrop(true)}} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onMarkPaid={handleMarkPaid} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}} onNewOrder={()=>setShowManualOrder(selectedDrop)}/>}
-        {tab==="products" && <ProductsTab products={products} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)}/>}
+        {tab==="products" && <ProductsTab products={products} dropItems={dropItems} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
         {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} onSaveWelcomeEmail={handleSaveWelcomeEmail} session={session} showToast={showToast}/>}
       </div>
-      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} prefilledDate={prefilledDropDate} allDrops={drops} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null);setPrefilledDropDate(null)}}/>}
-      {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} allDrops={drops} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
+      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} prefilledDate={prefilledDropDate} allDrops={drops} products={products} onCreateProduct={handleCreateProductFromDrop} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null);setPrefilledDropDate(null)}}/>}
+      {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} allDrops={drops} products={products} onCreateProduct={handleCreateProductFromDrop} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
       {showNewCustomer && <CustomerFormModal mode="create" onSave={handleAddCustomer} onClose={()=>setShowNewCustomer(false)}/>}
       {showEditCustomer && <CustomerFormModal mode="edit" customer={showEditCustomer} onSave={d=>handleEditCustomer(showEditCustomer.id,d)} onClose={()=>setShowEditCustomer(null)}/>}
       {showEditProfile && <ProfileFormModal creator={creator} onSave={handleEditProfile} onClose={()=>setShowEditProfile(false)}/>}
@@ -2013,7 +2020,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
 // ============================================================
 // v28a: PRODUCTS TAB — creator product library
 // ============================================================
-function ProductsTab({ products, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently }) {
+function ProductsTab({ products, dropItems, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently }) {
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState(null);
@@ -2105,7 +2112,10 @@ function ProductsTab({ products, onNew, onEdit, onArchive, onUnarchive, onDelete
                   </div>
                 )}
                 {product.sku && <div style={{fontSize:11,color:"var(--text-tertiary)",marginBottom:8}}>SKU: {product.sku}</div>}
-                <div style={{marginTop:"auto",display:"flex",gap:6,flexWrap:"wrap",paddingTop:8,borderTop:"1px solid var(--border)"}}>
+                <div style={{marginTop:"auto",fontSize:12,color:"var(--text-tertiary)",paddingTop:8,borderTop:"1px solid var(--border)",marginBottom:6}}>
+                  {(()=>{const n=[...new Set((dropItems||[]).filter(di=>di.product_id===product.id).map(di=>di.drop_id))].length;return n>0?`Used in ${n} drop${n!==1?"s":""}`:"Not used in any drops yet";})()}
+                </div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                   {isArchived ? (<>
                     <button className="btn btn-ghost btn-sm" onClick={()=>onUnarchive(product.id)}>Restore</button>
                     <button className="btn btn-danger btn-sm" onClick={()=>onDeletePermanently(product)}>{I.trash} Delete</button>
@@ -3166,7 +3176,7 @@ function ImageUpload({ value, onChange, label, frameRatio = "1:1" }) {
 }
 
 // --- Drop Form (create + edit, with images) ---
-function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, prefilledDate, allDrops, onSave, onClose }) {
+function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, prefilledDate, allDrops, products, onCreateProduct, onSave, onClose }) {
   const src = drop || duplicateFrom;
   const srcItems = existingItems || duplicateItems;
   const [title, setTitle] = useState(duplicateFrom ? "" : (src?.title || ""));
@@ -3201,17 +3211,25 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
       unlimited: i.quantity===-1, sortOrder: i.sort_order,
       imageUrl: i.image_data?.url || i.image_url||"",
       imagePan: { x: i.image_data?.x ?? 50, y: i.image_data?.y ?? 50 },
+      productId: i.product_id || null,
+      capacityWeight: i.capacity_weight != null ? String(i.capacity_weight) : "1",
     }));
-    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "", imagePan: { x: 50, y: 50 } }];
+    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "", imagePan: { x: 50, y: 50 }, productId: null, capacityWeight: "1" }];
   });
   const [saving, setSaving] = useState(false);
-  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 } }]);
+  const [acItemId, setAcItemId] = useState(null);
+  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 }, productId: null, capacityWeight: "1" }]);
   const removeItem = (id) => items.length > 1 && setItems(items.filter(i => i.id !== id));
   const updateItem = (id, f, v) => setItems(items.map(i => (i.id === id ? { ...i, [f]: v } : i)));
+  const applyProduct = (itemId, p) => setItems(prev => prev.map(i => i.id !== itemId ? i : { ...i, name: p.name, description: p.description || "", price: String(p.price), imageUrl: p.image_data?.url || p.image_url || "", imagePan: { x: p.image_data?.x ?? 50, y: p.image_data?.y ?? 50 }, productId: p.id, capacityWeight: p.capacity_weight != null ? String(p.capacity_weight) : "1" }));
   // v26: when windows are enabled, auto-compute pickup_time string from the windows span
   // so all existing display code continues to work.
   const windowsValid = windows.every(w => w.start && w.end && (w.unlimited || (w.slotLimit && Number(w.slotLimit) > 0)));
   const effectivePickupTime = useWindows ? spanWindows(windows) : pickupTime;
+  const acActiveItem = items.find(i => i.id === acItemId);
+  const acQ = acActiveItem?.name || "";
+  const acResults = acItemId ? (acQ.length === 0 ? (products||[]).filter(p=>!p.archived) : acQ.length >= 3 ? (products||[]).filter(p=>!p.archived&&p.name.toLowerCase().includes(acQ.toLowerCase())) : null) : null;
+  const acShowAddNew = !!acItemId && acQ.length >= 3 && !(products||[]).some(p=>!p.archived&&p.name.toLowerCase()===acQ.toLowerCase());
   const canSave = title && pickupDate && pickupLocation && !saving
     && items.every(i => i.name && i.price)
     && (useWindows ? (windows.length > 0 && windowsValid) : !!pickupTime);
@@ -3315,7 +3333,15 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><label className="form-label" style={{marginBottom:0}}>Menu Items <span style={{color:"var(--accent)"}}>*</span></label><button className="btn btn-ghost btn-sm" onClick={addItem}>{I.plus} Add Item</button></div>
         {items.map((item,idx)=>(<div key={item.id} style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:16,marginBottom:8}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Item {idx+1}</span>{items.length>1&&<button className="btn btn-ghost btn-sm" onClick={()=>removeItem(item.id)} style={{color:"var(--accent)",padding:4}}>{I.x}</button>}</div>
-          <input className="form-input" placeholder="Item name *" value={item.name} onChange={e=>updateItem(item.id,"name",e.target.value)} style={{marginBottom:8}}/>
+          <div style={{position:"relative",marginBottom:8}}>
+            <input className="form-input" placeholder="Item name *" value={item.name} onChange={e=>{const v=e.target.value;setItems(prev=>prev.map(i=>i.id===item.id?{...i,name:v,productId:null}:i));}} onFocus={()=>setAcItemId(item.id)} onBlur={()=>setTimeout(()=>setAcItemId(prev=>prev===item.id?null:prev),150)}/>
+            {acItemId===item.id&&acResults!==null&&(acResults.length>0||acShowAddNew)&&(
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",boxShadow:"var(--shadow-lg)",maxHeight:220,overflowY:"auto",marginTop:2}}>
+                {acResults.map(p=>(<button key={p.id} onMouseDown={e=>e.preventDefault()} onClick={()=>{applyProduct(item.id,p);setAcItemId(null);}} style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",background:"none",border:"none",borderBottom:"1px solid var(--border)",cursor:"pointer"}} onMouseOver={e=>e.currentTarget.style.background="var(--surface-alt)"} onMouseOut={e=>e.currentTarget.style.background="none"}><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:12,color:"var(--text-secondary)"}}>{fmt(p.price)}{p.description?" · "+p.description.slice(0,50)+(p.description.length>50?"...":""):""}</div></button>))}
+                {acShowAddNew&&(<button onMouseDown={e=>e.preventDefault()} onClick={async()=>{const p=await onCreateProduct(item.name);if(p)setItems(prev=>prev.map(i=>i.id===item.id?{...i,productId:p.id}:i));setAcItemId(null);}} style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontWeight:600,fontSize:13}}>{I.plus} Add "{item.name}" as new product</button>)}
+              </div>
+            )}
+          </div>
           <textarea className="form-textarea" placeholder="Description (optional) — ingredients, allergens, serving size..." value={item.description} onChange={e=>updateItem(item.id,"description",e.target.value)} style={{marginBottom:8,minHeight:56,fontSize:13}}/>
           <div className="form-row"><input className="form-input" type="number" placeholder="Price *" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>          <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
           <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} panValue={item.imagePan} onPanChange={pan=>updateItem(item.id,"imagePan",pan)} label="Item Image (optional)" frameRatio="1:1"/>
