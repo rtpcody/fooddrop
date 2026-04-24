@@ -424,8 +424,14 @@ function useRoute() {
 }
 
 function parseRoute(hash) {
-  const path = hash.replace("#/", "").replace(/\/$/, "");
   const base = { slug: null, isAdmin: false, isLoginPage: false, isOnboardingPage: false, isResetPasswordPage: false };
+  // Supabase email callback — tokens injected into hash before our router runs
+  if (hash.includes("access_token=") && !hash.startsWith("#/")) {
+    const params = new URLSearchParams(hash.replace(/^#/, ""));
+    const type = params.get("type");
+    return { ...base, isOnboardingPage: type !== "recovery", isResetPasswordPage: type === "recovery" };
+  }
+  const path = hash.replace("#/", "").replace(/\/$/, "");
   if (!path) return base;
   if (path === "login") return { ...base, isLoginPage: true };
   if (path === "onboarding") return { ...base, isOnboardingPage: true };
