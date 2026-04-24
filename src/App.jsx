@@ -95,6 +95,29 @@ const supabase = {
         return { error: null };
       } catch (e) { return { error: { message: e.message } }; }
     },
+    signUp: async (email, password) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) return { user: null, error: { message: data.error_description || data.msg || "Signup failed" } };
+        return { user: data.user || data, error: null };
+      } catch (e) { return { user: null, error: { message: e.message } }; }
+    },
+    resetPasswordForEmail: async (email) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        if (!res.ok) { const d = await res.json(); return { error: { message: d.error_description || d.msg || "Failed to send reset email" } }; }
+        return { error: null };
+      } catch (e) { return { error: { message: e.message } }; }
+    },
   },
 };
 
@@ -402,13 +425,16 @@ function useRoute() {
 
 function parseRoute(hash) {
   const path = hash.replace("#/", "").replace(/\/$/, "");
-  if (!path) return { slug: null, isAdmin: false, isLoginPage: false };
-  if (path === "login") return { slug: null, isAdmin: false, isLoginPage: true };
+  const base = { slug: null, isAdmin: false, isLoginPage: false, isOnboardingPage: false, isResetPasswordPage: false };
+  if (!path) return base;
+  if (path === "login") return { ...base, isLoginPage: true };
+  if (path === "onboarding") return { ...base, isOnboardingPage: true };
+  if (path === "reset-password") return { ...base, isResetPasswordPage: true };
   const parts = path.split("/");
   if (parts.length >= 2 && parts[parts.length - 1] === "admin") {
-    return { slug: parts.slice(0, -1).join("/"), isAdmin: true, isLoginPage: false };
+    return { ...base, slug: parts.slice(0, -1).join("/"), isAdmin: true };
   }
-  return { slug: parts.join("/"), isAdmin: false, isLoginPage: false };
+  return { ...base, slug: parts.join("/") };
 }
 
 // ============================================================
@@ -434,6 +460,22 @@ export default function FoodDropApp() {
     try { const s = localStorage.getItem("fd_session"); return s ? JSON.parse(s) : null; } catch { return null; }
   });
   const [authChecked, setAuthChecked] = useState(false);
+  const [authCallbackUser, setAuthCallbackUser] = useState(null);
+  // Capture email-verification / password-reset tokens that Supabase injects into the URL hash
+  const [authCallback] = useState(() => {
+    const h = window.location.hash;
+    if (h.includes("access_token=") && !h.startsWith("#/")) {
+      const params = new URLSearchParams(h.replace(/^#/, ""));
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+      const type = params.get("type");
+      if (access_token && type) {
+        window.history.replaceState(null, "", window.location.pathname + (type === "recovery" ? "#/reset-password" : "#/onboarding"));
+        return { access_token, refresh_token, type };
+      }
+    }
+    return null;
+  });
 
   const showToast = useCallback((msg, type = "ok") => { setToast(msg); setToastType(type); setTimeout(() => setToast(null), 3500); }, []);
 
@@ -443,16 +485,22 @@ export default function FoodDropApp() {
     else localStorage.removeItem("fd_session");
   }, [session]);
 
-  // Validate session on mount
+  // Validate session on mount; also resolve user from email-verification/password-reset callbacks
   useEffect(() => {
-    const checkSession = async () => {
+    const init = async () => {
+      if (authCallback?.access_token) {
+        const { user } = await supabase.auth.getUser(authCallback.access_token);
+        if (user) setAuthCallbackUser(user);
+        setAuthChecked(true);
+        return;
+      }
       if (session?.access_token) {
         const { user } = await supabase.auth.getUser(session.access_token);
         if (!user) setSession(null);
       }
       setAuthChecked(true);
     };
-    checkSession();
+    init();
   }, []);
 
 const handleLogin = async (email, password) => {
@@ -474,6 +522,46 @@ const handleLogin = async (email, password) => {
     if (session?.access_token) await supabase.auth.signOut(session.access_token);
     setSession(null);
     window.location.hash = "#/login";
+  };
+
+  const handleSignup = async (email, password) => {
+    const { user, error } = await supabase.auth.signUp(email, password);
+    if (error) return { error };
+    return { user, error: null };
+  };
+
+  const handleForgotPassword = async (email) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) return { error };
+    return { error: null };
+  };
+
+  const handleResetPassword = async (newPassword) => {
+    if (!authCallback?.access_token) return { error: { message: "Invalid or expired reset link." } };
+    const { error } = await supabase.auth.updateUser(authCallback.access_token, { password: newPassword });
+    if (error) return { error };
+    return { error: null };
+  };
+
+  const handleCompleteOnboarding = async (name) => {
+    if (!authCallbackUser) return;
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "creator";
+    const { data: existing } = await supabase.from("creators").select("slug").execute();
+    const slugSet = new Set((existing || []).map(c => c.slug));
+    let finalSlug = base; let n = 2;
+    while (slugSet.has(finalSlug)) { finalSlug = `${base}-${n}`; n++; }
+    const { data, error } = await supabase.from("creators").insert({
+      name,
+      slug: finalSlug,
+      auth_user_id: authCallbackUser.id,
+      email: authCallbackUser.email,
+      tagline: "",
+      bio: "",
+      social_links: {},
+    }).select("*").single().execute();
+    if (error) { showToast("Failed to create your profile. Please try again.", "error"); return; }
+    setSession({ access_token: authCallback.access_token, refresh_token: authCallback.refresh_token, user: authCallbackUser });
+    window.location.hash = `#/${data.slug}/admin`;
   };
 
   const loadData = useCallback(async () => {
@@ -522,8 +610,38 @@ const handleLogin = async (email, password) => {
 
   if (loading || !authChecked) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
 
-// Universal login page at /#/login
-  const { isLoginPage } = parseRoute(route);
+// Onboarding + reset-password are standalone pages (reached via email link callbacks)
+  const { isLoginPage, isOnboardingPage, isResetPasswordPage } = parseRoute(route);
+
+  if (isOnboardingPage) {
+    if (!authCallback) { window.location.hash = "#/login"; return null; }
+    if (!authCallbackUser) return (
+      <><style>{CSS}</style><div className="app">
+        <div className="loading-screen" style={{color:"var(--text)"}}>
+          <h2>Link expired or invalid</h2>
+          <p style={{color:"var(--text-secondary)"}}>Please try signing up again.</p>
+          <a href="#/login" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>← Sign In</a>
+        </div>
+      </div></>
+    );
+    return (
+      <><style>{CSS}</style><div className="app">
+        <OnboardingPage userEmail={authCallbackUser.email} onComplete={handleCompleteOnboarding} showToast={showToast}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  if (isResetPasswordPage) {
+    return (
+      <><style>{CSS}</style><div className="app">
+        <ResetPasswordPage onReset={handleResetPassword} showToast={showToast}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  // Universal login page at /#/login
   if (isLoginPage) {
     // If already logged in, redirect to their dashboard
     if (session?.user) {
@@ -535,7 +653,7 @@ const handleLogin = async (email, password) => {
     }
     return (
       <><style>{CSS}</style><div className="app">
-        <LoginPage creator={null} onLogin={handleLogin} showToast={showToast}/>
+        <LoginPage creator={null} onLogin={handleLogin} onSignup={handleSignup} onForgotPassword={handleForgotPassword} showToast={showToast}/>
         {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
       </div></>
     );
@@ -577,7 +695,7 @@ const handleLogin = async (email, password) => {
     if (!isLoggedIn) {
       return (
         <><style>{CSS}</style><div className="app">
-          <LoginPage creator={creator} onLogin={handleLogin} showToast={showToast}/>
+          <LoginPage creator={creator} onLogin={handleLogin} onSignup={handleSignup} onForgotPassword={handleForgotPassword} showToast={showToast}/>
           {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
         </div></>
       );
@@ -618,15 +736,20 @@ const handleLogin = async (email, password) => {
 }
 
 // ============================================================
-// LOGIN PAGE
+// LOGIN PAGE — Sign In / Create Account / Forgot Password
 // ============================================================
-function LoginPage({ creator, onLogin, showToast }) {
+function LoginPage({ creator, onLogin, onSignup, onForgotPassword, showToast }) {
+  const [view, setView] = useState("login"); // "login" | "signup" | "forgot" | "check-email"
+  const [checkEmailFor, setCheckEmailFor] = useState("signup"); // "signup" | "reset"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async () => {
+  const switchView = (v) => { setView(v); setError(null); setPassword(""); setConfirmPassword(""); };
+
+  const doLogin = async () => {
     if (!email || !password) return;
     setLoading(true); setError(null);
     const { error: err } = await onLogin(email, password);
@@ -634,7 +757,46 @@ function LoginPage({ creator, onLogin, showToast }) {
     if (err) setError(err.message);
   };
 
-  const handleKeyDown = (e) => { if (e.key === "Enter") handleSubmit(); };
+  const doSignup = async () => {
+    if (!email || !password || !confirmPassword) return;
+    if (password !== confirmPassword) { setError("Passwords don't match."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    setLoading(true); setError(null);
+    const { error: err } = await onSignup(email, password);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setCheckEmailFor("signup"); setView("check-email");
+  };
+
+  const doForgot = async () => {
+    if (!email) return;
+    setLoading(true); setError(null);
+    const { error: err } = await onForgotPassword(email);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setCheckEmailFor("reset"); setView("check-email");
+  };
+
+  const handleKey = (e) => { if (e.key !== "Enter") return; if (view==="login") doLogin(); else if (view==="signup") doSignup(); else if (view==="forgot") doForgot(); };
+
+  if (view === "check-email") {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-brand">
+            <div className="login-brand-icon">📬</div>
+            <h2>Check your email</h2>
+            <p>We sent a link to <strong>{email}</strong></p>
+          </div>
+          <p style={{fontSize:14,color:"var(--text-secondary)",textAlign:"center",lineHeight:1.6,marginBottom:8}}>
+            Click the link in that email to {checkEmailFor==="signup"?"verify your account and continue setup":"reset your password"}.
+          </p>
+          <p style={{fontSize:12,color:"var(--text-tertiary)",textAlign:"center",marginBottom:20}}>Don't see it? Check your spam folder.</p>
+          <button className="btn btn-ghost btn-full" onClick={()=>switchView("login")}>← Back to sign in</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="login-page">
@@ -642,12 +804,162 @@ function LoginPage({ creator, onLogin, showToast }) {
         <div className="login-brand">
           <div className="login-brand-icon">🍽️</div>
           <h2>{creator?.name || "FoodDrop"}</h2>
-          <p>Creator Dashboard</p>
+          <p>{view==="forgot" ? "Reset your password" : "Creator Dashboard"}</p>
+        </div>
+
+        {view !== "forgot" && (
+          <div style={{display:"flex",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:3,marginBottom:20}}>
+            <button onClick={()=>switchView("login")} style={{flex:1,padding:"7px 0",borderRadius:"var(--radius-sm)",border:"none",background:view==="login"?"var(--surface)":"transparent",fontWeight:view==="login"?600:400,cursor:"pointer",fontSize:13,color:"var(--text)",boxShadow:view==="login"?"var(--shadow-sm)":"none",transition:"all 0.15s"}}>Sign In</button>
+            <button onClick={()=>switchView("signup")} style={{flex:1,padding:"7px 0",borderRadius:"var(--radius-sm)",border:"none",background:view==="signup"?"var(--surface)":"transparent",fontWeight:view==="signup"?600:400,cursor:"pointer",fontSize:13,color:"var(--text)",boxShadow:view==="signup"?"var(--shadow-sm)":"none",transition:"all 0.15s"}}>Create Account</button>
+          </div>
+        )}
+
+        {error && <div className="login-error">{error}</div>}
+
+        <div className="form-group">
+          <label className="form-label">Email</label>
+          <input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKey}/>
+        </div>
+
+        {view !== "forgot" && (
+          <div className="form-group">
+            <label className="form-label">Password</label>
+            <input className="form-input" type="password" placeholder={view==="signup"?"Create a password (min 6 chars)":"Enter your password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKey}/>
+          </div>
+        )}
+
+        {view === "signup" && (
+          <div className="form-group">
+            <label className="form-label">Confirm Password</label>
+            <input className="form-input" type="password" placeholder="Re-enter your password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} onKeyDown={handleKey}/>
+          </div>
+        )}
+
+        {view === "login" && (
+          <div style={{textAlign:"right",marginBottom:16,marginTop:-8}}>
+            <button onClick={()=>switchView("forgot")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-secondary)",fontSize:12}}>Forgot password?</button>
+          </div>
+        )}
+
+        {view === "login" && <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={doLogin}>{loading?"Signing in...":"Sign In"}</button>}
+        {view === "signup" && <button className="btn btn-primary btn-full" disabled={!email||!password||!confirmPassword||loading} onClick={doSignup}>{loading?"Creating account...":"Create Account"}</button>}
+        {view === "forgot" && (
+          <>
+            <button className="btn btn-primary btn-full" disabled={!email||loading} onClick={doForgot} style={{marginTop:4}}>{loading?"Sending...":"Send Reset Email"}</button>
+            <button className="btn btn-ghost btn-full" style={{marginTop:8}} onClick={()=>switchView("login")}>← Back to sign in</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ONBOARDING PAGE — post email-verification, collect business name
+// ============================================================
+const ROTATING_WORDS = ["bakery", "food biz", "cookie brand", "farm stand", "pop-up", "company"];
+function OnboardingPage({ userEmail, onComplete, showToast }) {
+  const [wordIdx, setWordIdx] = useState(0);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const t = setInterval(() => setWordIdx(i => (i + 1) % ROTATING_WORDS.length), 1800);
+    return () => clearInterval(t);
+  }, []);
+
+  const handleSubmit = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    await onComplete(name.trim());
+    setSaving(false);
+  };
+
+  return (
+    <div className="login-page">
+      <div className="login-card" style={{maxWidth:440}}>
+        <div className="login-brand">
+          <div className="login-brand-icon">🍽️</div>
+          <h2>Welcome to FoodDrop</h2>
+          {userEmail && <p style={{fontSize:12,color:"var(--text-tertiary)",marginTop:4}}>{userEmail}</p>}
+        </div>
+        <p style={{fontSize:18,fontWeight:600,color:"var(--text)",marginBottom:20,textAlign:"center",lineHeight:1.4}}>
+          {"What's the name of your "}
+          <span style={{color:"var(--accent)"}}>{ROTATING_WORDS[wordIdx]}</span>{"?"}
+        </p>
+        <div className="form-group">
+          <input
+            className="form-input"
+            style={{fontSize:15}}
+            placeholder='e.g., "Warmly Cookies"'
+            value={name}
+            onChange={e=>setName(e.target.value)}
+            onKeyDown={e=>{ if (e.key==="Enter") handleSubmit(); }}
+            autoFocus
+          />
+          <div className="form-hint" style={{textAlign:"center",marginTop:8}}>* You can update this anytime in Settings.</div>
+        </div>
+        <button className="btn btn-primary btn-full" disabled={!name.trim()||saving} onClick={handleSubmit} style={{marginTop:4}}>
+          {saving ? "Setting up your dashboard…" : "Continue →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// RESET PASSWORD PAGE — reached via password-reset email link
+// ============================================================
+function ResetPasswordPage({ onReset, showToast }) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!password || !confirmPassword) return;
+    if (password !== confirmPassword) { setError("Passwords don't match."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    setLoading(true); setError(null);
+    const { error: err } = await onReset(password);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setDone(true);
+    showToast("Password updated successfully.");
+    setTimeout(() => { window.location.hash = "#/login"; }, 1800);
+  };
+
+  if (done) return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-icon">✅</div>
+          <h2>Password updated</h2>
+          <p>Redirecting you to sign in…</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-icon">🔑</div>
+          <h2>Set a new password</h2>
+          <p>Choose a strong password for your account</p>
         </div>
         {error && <div className="login-error">{error}</div>}
-        <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown}/></div>
-        <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/></div>
-        <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={handleSubmit}>{loading?"Signing in...":"Sign In"}</button>
+        <div className="form-group">
+          <label className="form-label">New Password</label>
+          <input className="form-input" type="password" placeholder="Min 6 characters" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")handleSubmit();}}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Confirm Password</label>
+          <input className="form-input" type="password" placeholder="Re-enter your password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")handleSubmit();}}/>
+        </div>
+        <button className="btn btn-primary btn-full" disabled={!password||!confirmPassword||loading} onClick={handleSubmit}>{loading?"Updating...":"Set New Password"}</button>
       </div>
     </div>
   );
@@ -694,7 +1006,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     if (!creator) return;
     const { data: nd, error } = await supabase.from("drops").insert({ creator_id: creator.id, title: d.title, description: d.description, status: "active", type: "standard", pickup_date: d.pickupDate, pickup_time: d.pickupTime, pickup_location: d.pickupLocation, image_url: d.imageUrl || "", image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null, use_pickup_windows: !!d.useWindows, pickup_windows: d.useWindows ? d.pickupWindows : null }).select("*").single().execute();
     if (error || !nd) { showToast("Failed to create drop", "error"); return; }
-    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null }))).execute();
+    await supabase.from("drop_items").insert(items.map((item, idx) => ({ drop_id: nd.id, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: idx, image_url: item.imageUrl || "", image_data: item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null, product_id: item.productId || null, capacity_weight: parseFloat(item.capacityWeight) || 1 }))).execute();
     setShowNewDrop(false); setDuplicateDrop(null); showToast("Drop created!"); loadData();
   };
 
@@ -703,15 +1015,22 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     for (const item of items) {
       const imgData = item.imageUrl ? { url: item.imageUrl, x: item.imagePan?.x ?? 50, y: item.imagePan?.y ?? 50 } : null;
       if (item.existingId) {
-        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "", image_data: imgData }).eq("id", item.existingId).execute();
+        await supabase.from("drop_items").update({ name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, image_url: item.imageUrl || "", image_data: imgData, product_id: item.productId || null, capacity_weight: parseFloat(item.capacityWeight) || 1 }).eq("id", item.existingId).execute();
       } else {
-        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "", image_data: imgData }).execute();
+        await supabase.from("drop_items").insert({ drop_id: dropId, name: item.name, description: item.description || "", price: parseFloat(item.price)||0, quantity: item.unlimited ? -1 : parseInt(item.quantity)||0, claimed: 0, sort_order: item.sortOrder||0, image_url: item.imageUrl || "", image_data: imgData, product_id: item.productId || null, capacity_weight: parseFloat(item.capacityWeight) || 1 }).execute();
       }
     }
     setShowEditDrop(null); showToast("Drop updated!"); loadData();
   };
 
   const handleAddCustomer = async (d) => { if (!creator) return; await supabase.from("customers").insert({ creator_id: creator.id, name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).execute(); setShowNewCustomer(false); showToast(`${d.name} added.`); loadData(); };
+  const handleCreateProductFromDrop = async (name) => {
+    if (!creator) return null;
+    const { data, error } = await supabase.from("products").insert({ creator_id: creator.id, name, description: "", price: 0, image_url: "", image_data: null, sku: "", tags: [], capacity_weight: 1, archived: false }).select("*").single().execute();
+    if (error || !data) { showToast("Failed to create product.", "error"); return null; }
+    loadData();
+    return data;
+  };
   const handleEditCustomer = async (custId, d) => { await supabase.from("customers").update({ name: d.name, email: d.email, phone: d.phone, prefer_contact: d.preferContact, notes: d.notes || "" }).eq("id", custId).execute(); setShowEditCustomer(null); setSelectedCustomer(null); showToast("Customer updated."); loadData(); };
   const handleDeleteCustomer = async (custId, custName) => { await supabase.from("customers").delete().eq("id", custId).execute(); setSelectedCustomer(null); showToast(`${custName} removed.`); loadData(); };
 
@@ -966,7 +1285,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null,
       sku: d.sku || "",
       tags: d.tags || [],
-      capacity_weight: parseFloat(d.capacityWeight) || 1,
+      capacity_weight: 1,
     }).execute();
     if (error) { showToast("Failed to create product.", "error"); return; }
     setShowNewProduct(false); showToast(`"${d.name}" added to products.`); loadData();
@@ -980,7 +1299,6 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
       image_data: d.imageUrl ? { url: d.imageUrl, x: d.imagePan?.x ?? 50, y: d.imagePan?.y ?? 50 } : null,
       sku: d.sku || "",
       tags: d.tags || [],
-      capacity_weight: parseFloat(d.capacityWeight) || 1,
     }).eq("id", id).execute();
     if (error) { showToast("Failed to update product.", "error"); return; }
     setShowEditProduct(null); showToast("Product updated."); loadData();
@@ -1069,14 +1387,14 @@ const handleDeleteDropPermanently = async (dropId) => {
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onNewOnDate={(date)=>{setPrefilledDropDate(date);setShowNewDrop(true)}} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onMarkPaid={handleMarkPaid} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}} onNewOrder={()=>setShowManualOrder(selectedDrop)}/>}
-        {tab==="products" && <ProductsTab products={products} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)}/>}
+        {tab==="products" && <ProductsTab products={products} dropItems={dropItems} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
         {tab==="settings" && <SettingsTab creator={creator} onEditProfile={()=>setShowEditProfile(true)} onSaveWelcomeEmail={handleSaveWelcomeEmail} session={session} showToast={showToast}/>}
       </div>
-      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} prefilledDate={prefilledDropDate} allDrops={drops} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null);setPrefilledDropDate(null)}}/>}
-      {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} allDrops={drops} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
+      {showNewDrop && <DropFormModal mode="create" duplicateFrom={duplicateDrop} duplicateItems={duplicateDrop?getDropItems(duplicateDrop.id):null} prefilledDate={prefilledDropDate} allDrops={drops} products={products} onCreateProduct={handleCreateProductFromDrop} onSave={handleCreateDrop} onClose={()=>{setShowNewDrop(false);setDuplicateDrop(null);setPrefilledDropDate(null)}}/>}
+      {showEditDrop && <DropFormModal mode="edit" drop={showEditDrop} existingItems={getDropItems(showEditDrop.id)} allDrops={drops} products={products} onCreateProduct={handleCreateProductFromDrop} onSave={(d,items)=>handleEditDrop(showEditDrop.id,d,items)} onClose={()=>setShowEditDrop(null)}/>}
       {showNewCustomer && <CustomerFormModal mode="create" onSave={handleAddCustomer} onClose={()=>setShowNewCustomer(false)}/>}
       {showEditCustomer && <CustomerFormModal mode="edit" customer={showEditCustomer} onSave={d=>handleEditCustomer(showEditCustomer.id,d)} onClose={()=>setShowEditCustomer(null)}/>}
       {showEditProfile && <ProfileFormModal creator={creator} onSave={handleEditProfile} onClose={()=>setShowEditProfile(false)}/>}
@@ -1089,8 +1407,8 @@ const handleDeleteDropPermanently = async (dropId) => {
       {/* v27.1: delete confirmation for archived drops (was previously orphaned state with no render) */}
       {showDeleteDrop && <PermanentDeleteDropModal drop={showDeleteDrop} onConfirm={()=>handleDeleteDropPermanently(showDeleteDrop.id)} onClose={()=>setShowDeleteDrop(null)}/>}
       {/* v28a: product modals */}
-      {showNewProduct && <ProductFormModal mode="create" onSave={handleCreateProduct} onClose={()=>setShowNewProduct(false)}/>}
-      {showEditProduct && <ProductFormModal mode="edit" product={showEditProduct} onSave={(d)=>handleEditProduct(showEditProduct.id, d)} onClose={()=>setShowEditProduct(null)}/>}
+      {showNewProduct && <ProductFormModal mode="create" onSave={handleCreateProduct} onClose={()=>setShowNewProduct(false)} allExistingTags={[...new Set(products.flatMap(p=>p.tags||[]))].sort()}/>}
+      {showEditProduct && <ProductFormModal mode="edit" product={showEditProduct} onSave={(d)=>handleEditProduct(showEditProduct.id,d)} onClose={()=>setShowEditProduct(null)} allExistingTags={[...new Set(products.flatMap(p=>p.tags||[]))].sort()} onArchive={()=>{handleArchiveProduct(showEditProduct.id);setShowEditProduct(null);}} onUnarchive={()=>{handleUnarchiveProduct(showEditProduct.id);setShowEditProduct(null);}} onDelete={()=>{setShowDeleteProduct(showEditProduct);setShowEditProduct(null);}}/>}
       {showDeleteProduct && <PermanentDeleteProductModal product={showDeleteProduct} onConfirm={()=>handleDeleteProductPermanently(showDeleteProduct.id)} onClose={()=>setShowDeleteProduct(null)}/>}
     </>
   );
@@ -2013,7 +2331,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
 // ============================================================
 // v28a: PRODUCTS TAB — creator product library
 // ============================================================
-function ProductsTab({ products, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently }) {
+function ProductsTab({ products, dropItems, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently }) {
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState(null);
@@ -2083,37 +2401,26 @@ function ProductsTab({ products, onNew, onEdit, onArchive, onUnarchive, onDelete
         <p>No products match your filters.</p>
       </div>
     ) : (
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {visible.map(product => {
           const isArchived = product.archived;
           const pos = product.image_data ? `${product.image_data.x}% ${product.image_data.y}%` : "50% 50%";
           return (
-            <div key={product.id} className="card card-hover" style={{opacity:isArchived?.6:1,padding:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-              <div style={{height:140,background:product.image_url?`url(${product.image_url})`:"var(--surface-alt)",backgroundSize:"cover",backgroundPosition:pos,position:"relative"}}>
-                {!product.image_url && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-tertiary)"}}>{I.image}</div>}
-                {isArchived && <span className="badge badge-archived" style={{position:"absolute",top:10,right:10}}>Archived</span>}
-              </div>
-              <div style={{padding:16,flex:1,display:"flex",flexDirection:"column"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
-                  <h3 style={{margin:0,lineHeight:1.3}}>{product.name}</h3>
-                  <span style={{fontWeight:600,whiteSpace:"nowrap",color:"var(--accent)"}}>{fmt(product.price)}</span>
+            <div key={product.id} className="card card-hover" onClick={()=>onEdit(product)} style={{opacity:isArchived?.6:1,padding:"12px 16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                  <span style={{fontWeight:600,fontSize:14,color:"var(--text)"}}>{product.name}</span>
+                  {isArchived && <span className="badge badge-archived" style={{fontSize:11}}>Archived</span>}
                 </div>
-                {product.description && <p style={{color:"var(--text-secondary)",fontSize:13,margin:"4px 0 8px",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{product.description}</p>}
-                {(product.tags || []).length > 0 && (
-                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
-                    {(product.tags || []).slice(0,3).map(t=><span key={t} className="drop-item-chip" style={{fontSize:11,padding:"3px 9px"}}>{t}</span>)}
+                <div style={{fontSize:13,fontWeight:600,color:"var(--accent)"}}>{fmt(product.price)}</div>
+                {(product.tags||[]).length > 0 && (
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:6}}>
+                    {(product.tags||[]).slice(0,5).map(t=><span key={t} className="drop-item-chip" style={{fontSize:11,padding:"2px 8px"}}>{t}</span>)}
                   </div>
                 )}
-                {product.sku && <div style={{fontSize:11,color:"var(--text-tertiary)",marginBottom:8}}>SKU: {product.sku}</div>}
-                <div style={{marginTop:"auto",display:"flex",gap:6,flexWrap:"wrap",paddingTop:8,borderTop:"1px solid var(--border)"}}>
-                  {isArchived ? (<>
-                    <button className="btn btn-ghost btn-sm" onClick={()=>onUnarchive(product.id)}>Restore</button>
-                    <button className="btn btn-danger btn-sm" onClick={()=>onDeletePermanently(product)}>{I.trash} Delete</button>
-                  </>) : (<>
-                    <button className="btn btn-secondary btn-sm" onClick={()=>onEdit(product)}>{I.edit} Edit</button>
-                    <button className="btn btn-ghost btn-sm" onClick={()=>onArchive(product.id)}>{I.archive} Archive</button>
-                  </>)}
-                </div>
+              </div>
+              <div style={{width:52,height:52,flexShrink:0,borderRadius:"var(--radius-sm)",overflow:"hidden",background:product.image_url?`url(${product.image_url})`:"var(--surface-alt)",backgroundSize:"cover",backgroundPosition:pos,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--text-tertiary)"}}>
+                {!product.image_url && I.image}
               </div>
             </div>
           );
@@ -2573,24 +2880,29 @@ function BulkDeleteCustomersModal({ count, onConfirm, onClose }) {
 }
 
 // v28a: Product form (create or edit)
-function ProductFormModal({ mode, product, onSave, onClose }) {
+function ProductFormModal({ mode, product, onSave, onClose, allExistingTags, onArchive, onUnarchive, onDelete }) {
   const [name, setName] = useState(product?.name || "");
   const [desc, setDesc] = useState(product?.description || "");
   const [price, setPrice] = useState(product?.price != null ? String(product.price) : "");
   const [sku, setSku] = useState(product?.sku || "");
-  const [capacityWeight, setCapacityWeight] = useState(product?.capacity_weight != null ? String(product.capacity_weight) : "1");
   const [imageUrl, setImageUrl] = useState(product?.image_data?.url || product?.image_url || "");
   const [imagePan, setImagePan] = useState({ x: product?.image_data?.x ?? 50, y: product?.image_data?.y ?? 50 });
-  const [tagsInput, setTagsInput] = useState((product?.tags || []).join(", "));
+  const [tags, setTags] = useState(product?.tags || []);
+  const [tagQuery, setTagQuery] = useState("");
+  const [tagAcOpen, setTagAcOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const canSave = name && price && !saving;
   const handleSave = async () => {
     setSaving(true);
-    const tags = tagsInput.split(",").map(t => t.trim()).filter(Boolean);
-    await onSave({ name, description: desc, price, sku, capacityWeight, imageUrl, imagePan, tags });
+    await onSave({ name, description: desc, price, sku, imageUrl, imagePan, tags });
     setSaving(false);
   };
+
+  const addTag = (t) => { const tr = t.trim(); if (tr && !tags.includes(tr)) setTags(prev=>[...prev,tr]); setTagQuery(""); };
+  const removeTag = (t) => setTags(tags.filter(x=>x!==t));
+  const tagSuggestions = (allExistingTags||[]).filter(t=>!tags.includes(t)&&(tagQuery===""||t.toLowerCase().includes(tagQuery.toLowerCase())));
+  const showAddNew = tagQuery.trim().length>0 && !(allExistingTags||[]).some(t=>t.toLowerCase()===tagQuery.trim().toLowerCase()) && !tags.includes(tagQuery.trim());
 
   return (
     <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
@@ -2599,21 +2911,60 @@ function ProductFormModal({ mode, product, onSave, onClose }) {
       <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" placeholder="Ingredients, allergens, serving size..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
       <ImageUploadWithPan value={imageUrl} onChange={setImageUrl} panValue={imagePan} onPanChange={setImagePan} label="Product Image (optional)" frameRatio="1:1"/>
       <div className="form-row">
-        <div className="form-group"><label className="form-label">Default Price <span style={{color:"var(--accent)"}}>*</span></label><input className="form-input" type="number" step="0.01" min="0" placeholder="12.00" value={price} onChange={e=>setPrice(e.target.value)}/><div className="form-hint">Editable per drop</div></div>
+        <div className="form-group">
+          <label className="form-label">Price <span style={{color:"var(--accent)"}}>*</span></label>
+          <div style={{position:"relative"}}>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"var(--text-secondary)",pointerEvents:"none",fontSize:14}}>$</span>
+            <input className="form-input" type="number" step="0.01" min="0" placeholder="12.00" value={price} onChange={e=>setPrice(e.target.value)} style={{paddingLeft:26}}/>
+          </div>
+          <div className="form-hint">Editable per drop</div>
+        </div>
         <div className="form-group"><label className="form-label">SKU</label><input className="form-input" placeholder="Optional — your own identifier" value={sku} onChange={e=>setSku(e.target.value)}/></div>
       </div>
       <div className="form-group">
         <label className="form-label">Tags</label>
-        <input className="form-input" placeholder="pizza, vegetarian, signature" value={tagsInput} onChange={e=>setTagsInput(e.target.value)}/>
-        <div className="form-hint">Comma-separated. Used to organize your catalog.</div>
-      </div>
-      <div className="form-group">
-        <label className="form-label">Capacity Weight</label>
-        <input className="form-input" type="number" step="0.1" min="0" placeholder="1" value={capacityWeight} onChange={e=>setCapacityWeight(e.target.value)}/>
-        <div className="form-hint">Advanced: units of pickup-window capacity one of these consumes. Leave at 1 unless you're modeling production throughput (coming soon in drops).</div>
+        {tags.length > 0 && (
+          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+            {tags.map(t=>(
+              <span key={t} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",background:"var(--accent-light)",color:"var(--accent)",borderRadius:"var(--radius-sm)",fontSize:12,fontWeight:500}}>
+                {t}
+                <button onClick={()=>removeTag(t)} style={{background:"none",border:"none",cursor:"pointer",padding:0,lineHeight:1,color:"var(--accent)",fontSize:14,marginLeft:2}}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{position:"relative"}}>
+          <input
+            className="form-input"
+            placeholder="Type a tag and press Enter…"
+            value={tagQuery}
+            onChange={e=>setTagQuery(e.target.value)}
+            onFocus={()=>setTagAcOpen(true)}
+            onBlur={()=>setTimeout(()=>setTagAcOpen(false),150)}
+            onKeyDown={e=>{if((e.key==="Enter"||e.key===",")&&tagQuery.trim()){e.preventDefault();addTag(tagQuery);}}}
+          />
+          {tagAcOpen&&(tagSuggestions.length>0||showAddNew)&&(
+            <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",boxShadow:"var(--shadow-lg)",maxHeight:180,overflowY:"auto",marginTop:2}}>
+              {tagSuggestions.map(t=>(
+                <button key={t} onMouseDown={e=>e.preventDefault()} onClick={()=>addTag(t)} style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",background:"none",border:"none",borderBottom:"1px solid var(--border)",cursor:"pointer",fontSize:13}} onMouseOver={e=>e.currentTarget.style.background="var(--surface-alt)"} onMouseOut={e=>e.currentTarget.style.background="none"}>{t}</button>
+              ))}
+              {showAddNew&&(<button onMouseDown={e=>e.preventDefault()} onClick={()=>addTag(tagQuery)} style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontWeight:600,fontSize:13}}>+ Add "{tagQuery.trim()}"</button>)}
+            </div>
+          )}
+        </div>
+        <div className="form-hint">Organize your catalog with tags.</div>
       </div>
       <p style={{fontSize:12,color:"var(--text-tertiary)",margin:"0 0 10px",textAlign:"center"}}><span style={{color:"var(--accent)"}}>*</span> Required fields</p>
       <button className="btn btn-primary btn-full" disabled={!canSave} onClick={handleSave}>{saving?"Saving...":(mode==="edit"?"Save Changes":"Create Product")}</button>
+      {mode==="edit"&&(
+        <div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--border)",display:"flex",gap:8,justifyContent:"flex-end"}}>
+          {product?.archived
+            ? <button className="btn btn-ghost btn-sm" onMouseDown={e=>e.preventDefault()} onClick={onUnarchive}>Restore from Archive</button>
+            : <button className="btn btn-ghost btn-sm" onMouseDown={e=>e.preventDefault()} onClick={onArchive}>{I.archive} Archive</button>
+          }
+          <button className="btn btn-danger btn-sm" onMouseDown={e=>e.preventDefault()} onClick={onDelete}>{I.trash} Delete</button>
+        </div>
+      )}
     </div></div>
   );
 }
@@ -3166,7 +3517,7 @@ function ImageUpload({ value, onChange, label, frameRatio = "1:1" }) {
 }
 
 // --- Drop Form (create + edit, with images) ---
-function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, prefilledDate, allDrops, onSave, onClose }) {
+function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItems, prefilledDate, allDrops, products, onCreateProduct, onSave, onClose }) {
   const src = drop || duplicateFrom;
   const srcItems = existingItems || duplicateItems;
   const [title, setTitle] = useState(duplicateFrom ? "" : (src?.title || ""));
@@ -3201,17 +3552,25 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
       unlimited: i.quantity===-1, sortOrder: i.sort_order,
       imageUrl: i.image_data?.url || i.image_url||"",
       imagePan: { x: i.image_data?.x ?? 50, y: i.image_data?.y ?? 50 },
+      productId: i.product_id || null,
+      capacityWeight: i.capacity_weight != null ? String(i.capacity_weight) : "1",
     }));
-    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "", imagePan: { x: 50, y: 50 } }];
+    return [{ id: "i0", name: "", description: "", price: "", quantity: "", unlimited: false, imageUrl: "", imagePan: { x: 50, y: 50 }, productId: null, capacityWeight: "1" }];
   });
   const [saving, setSaving] = useState(false);
-  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 } }]);
+  const [acItemId, setAcItemId] = useState(null);
+  const addItem = () => setItems([...items, { id: `i${Date.now()}`, name: "", description: "", price: "", quantity: "", unlimited: false, sortOrder: items.length, imageUrl: "", imagePan: { x: 50, y: 50 }, productId: null, capacityWeight: "1" }]);
   const removeItem = (id) => items.length > 1 && setItems(items.filter(i => i.id !== id));
   const updateItem = (id, f, v) => setItems(items.map(i => (i.id === id ? { ...i, [f]: v } : i)));
+  const applyProduct = (itemId, p) => setItems(prev => prev.map(i => i.id !== itemId ? i : { ...i, name: p.name, description: p.description || "", price: String(p.price), imageUrl: p.image_data?.url || p.image_url || "", imagePan: { x: p.image_data?.x ?? 50, y: p.image_data?.y ?? 50 }, productId: p.id, capacityWeight: p.capacity_weight != null ? String(p.capacity_weight) : "1" }));
   // v26: when windows are enabled, auto-compute pickup_time string from the windows span
   // so all existing display code continues to work.
   const windowsValid = windows.every(w => w.start && w.end && (w.unlimited || (w.slotLimit && Number(w.slotLimit) > 0)));
   const effectivePickupTime = useWindows ? spanWindows(windows) : pickupTime;
+  const acActiveItem = items.find(i => i.id === acItemId);
+  const acQ = acActiveItem?.name || "";
+  const acResults = acItemId ? (acQ.length === 0 ? (products||[]).filter(p=>!p.archived) : acQ.length >= 3 ? (products||[]).filter(p=>!p.archived&&p.name.toLowerCase().includes(acQ.toLowerCase())) : null) : null;
+  const acShowAddNew = !!acItemId && acQ.length >= 3 && !(products||[]).some(p=>!p.archived&&p.name.toLowerCase()===acQ.toLowerCase());
   const canSave = title && pickupDate && pickupLocation && !saving
     && items.every(i => i.name && i.price)
     && (useWindows ? (windows.length > 0 && windowsValid) : !!pickupTime);
@@ -3315,7 +3674,15 @@ function DropFormModal({ mode, drop, existingItems, duplicateFrom, duplicateItem
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><label className="form-label" style={{marginBottom:0}}>Menu Items <span style={{color:"var(--accent)"}}>*</span></label><button className="btn btn-ghost btn-sm" onClick={addItem}>{I.plus} Add Item</button></div>
         {items.map((item,idx)=>(<div key={item.id} style={{background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:16,marginBottom:8}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><span style={{fontSize:13,fontWeight:600,color:"var(--text-secondary)"}}>Item {idx+1}</span>{items.length>1&&<button className="btn btn-ghost btn-sm" onClick={()=>removeItem(item.id)} style={{color:"var(--accent)",padding:4}}>{I.x}</button>}</div>
-          <input className="form-input" placeholder="Item name *" value={item.name} onChange={e=>updateItem(item.id,"name",e.target.value)} style={{marginBottom:8}}/>
+          <div style={{position:"relative",marginBottom:8}}>
+            <input className="form-input" placeholder="Item name *" value={item.name} onChange={e=>{const v=e.target.value;setItems(prev=>prev.map(i=>i.id===item.id?{...i,name:v,productId:null}:i));}} onFocus={()=>setAcItemId(item.id)} onBlur={()=>setTimeout(()=>setAcItemId(prev=>prev===item.id?null:prev),150)}/>
+            {acItemId===item.id&&acResults!==null&&(acResults.length>0||acShowAddNew)&&(
+              <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius-sm)",boxShadow:"var(--shadow-lg)",maxHeight:220,overflowY:"auto",marginTop:2}}>
+                {acResults.map(p=>(<button key={p.id} onMouseDown={e=>e.preventDefault()} onClick={()=>{applyProduct(item.id,p);setAcItemId(null);}} style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",background:"none",border:"none",borderBottom:"1px solid var(--border)",cursor:"pointer"}} onMouseOver={e=>e.currentTarget.style.background="var(--surface-alt)"} onMouseOut={e=>e.currentTarget.style.background="none"}><div style={{fontWeight:600,fontSize:13}}>{p.name}</div><div style={{fontSize:12,color:"var(--text-secondary)"}}>{fmt(p.price)}{p.description?" · "+p.description.slice(0,50)+(p.description.length>50?"...":""):""}</div></button>))}
+                {acShowAddNew&&(<button onMouseDown={e=>e.preventDefault()} onClick={async()=>{const p=await onCreateProduct(item.name);if(p)setItems(prev=>prev.map(i=>i.id===item.id?{...i,productId:p.id}:i));setAcItemId(null);}} style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontWeight:600,fontSize:13}}>{I.plus} Add "{item.name}" as new product</button>)}
+              </div>
+            )}
+          </div>
           <textarea className="form-textarea" placeholder="Description (optional) — ingredients, allergens, serving size..." value={item.description} onChange={e=>updateItem(item.id,"description",e.target.value)} style={{marginBottom:8,minHeight:56,fontSize:13}}/>
           <div className="form-row"><input className="form-input" type="number" placeholder="Price *" min="0" step="0.01" value={item.price} onChange={e=>updateItem(item.id,"price",e.target.value)}/><input className="form-input" type="number" placeholder="Quantity" min="1" value={item.unlimited?"":item.quantity} disabled={item.unlimited} onChange={e=>updateItem(item.id,"quantity",e.target.value)}/></div>          <label className="checkbox-row" style={{marginTop:10}}><input type="checkbox" checked={item.unlimited} onChange={e=>updateItem(item.id,"unlimited",e.target.checked)}/>Unlimited quantity</label>
           <ImageUpload value={item.imageUrl} onChange={url=>updateItem(item.id,"imageUrl",url)} panValue={item.imagePan} onPanChange={pan=>updateItem(item.id,"imagePan",pan)} label="Item Image (optional)" frameRatio="1:1"/>
