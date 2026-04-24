@@ -97,7 +97,7 @@ const supabase = {
     },
     signUp: async (email, password) => {
       try {
-        const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/signup?redirect_to=${encodeURIComponent("https://app.getfooddrop.com")}`, {
           method: "POST",
           headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
           body: JSON.stringify({ email, password }),
@@ -112,7 +112,7 @@ const supabase = {
         const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
           method: "POST",
           headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify({ email, redirect_to: "https://app.getfooddrop.com" }),
         });
         if (!res.ok) { const d = await res.json(); return { error: { message: d.error_description || d.msg || "Failed to send reset email" } }; }
         return { error: null };
@@ -513,6 +513,10 @@ const handleLogin = async (email, password) => {
       const matched = (cRes.data || []).find(c => c.auth_user_id === s.user.id);
       if (matched?.slug) {
         window.location.hash = `#/${matched.slug}/admin`;
+      } else {
+        // Auth user exists but no creators row yet — resume onboarding
+        setAuthCallbackUser(s.user);
+        window.location.hash = "#/onboarding";
       }
     }
     return { error: null };
@@ -544,7 +548,8 @@ const handleLogin = async (email, password) => {
   };
 
   const handleCompleteOnboarding = async (name) => {
-    if (!authCallbackUser) return;
+    const user = authCallbackUser || session?.user;
+    if (!user) return;
     const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "creator";
     const { data: existing } = await supabase.from("creators").select("slug").execute();
     const slugSet = new Set((existing || []).map(c => c.slug));
@@ -553,14 +558,17 @@ const handleLogin = async (email, password) => {
     const { data, error } = await supabase.from("creators").insert({
       name,
       slug: finalSlug,
-      auth_user_id: authCallbackUser.id,
-      email: authCallbackUser.email,
+      auth_user_id: user.id,
+      email: user.email,
       tagline: "",
       bio: "",
       social_links: {},
     }).select("*").single().execute();
     if (error) { showToast("Failed to create your profile. Please try again.", "error"); return; }
-    setSession({ access_token: authCallback.access_token, refresh_token: authCallback.refresh_token, user: authCallbackUser });
+    const newSession = authCallback
+      ? { access_token: authCallback.access_token, refresh_token: authCallback.refresh_token, user }
+      : { ...session, user };
+    setSession(newSession);
     window.location.hash = `#/${data.slug}/admin`;
   };
 
@@ -614,7 +622,7 @@ const handleLogin = async (email, password) => {
   const { isLoginPage, isOnboardingPage, isResetPasswordPage } = parseRoute(route);
 
   if (isOnboardingPage) {
-    if (!authCallback) { window.location.hash = "#/login"; return null; }
+    if (!authCallback && !authCallbackUser) { window.location.hash = "#/login"; return null; }
     if (!authCallbackUser) return (
       <><style>{CSS}</style><div className="app">
         <div className="loading-screen" style={{color:"var(--text)"}}>
