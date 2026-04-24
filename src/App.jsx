@@ -95,6 +95,29 @@ const supabase = {
         return { error: null };
       } catch (e) { return { error: { message: e.message } }; }
     },
+    signUp: async (email, password) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await res.json();
+        if (!res.ok) return { user: null, error: { message: data.error_description || data.msg || "Signup failed" } };
+        return { user: data.user || data, error: null };
+      } catch (e) { return { user: null, error: { message: e.message } }; }
+    },
+    resetPasswordForEmail: async (email) => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        if (!res.ok) { const d = await res.json(); return { error: { message: d.error_description || d.msg || "Failed to send reset email" } }; }
+        return { error: null };
+      } catch (e) { return { error: { message: e.message } }; }
+    },
   },
 };
 
@@ -402,13 +425,16 @@ function useRoute() {
 
 function parseRoute(hash) {
   const path = hash.replace("#/", "").replace(/\/$/, "");
-  if (!path) return { slug: null, isAdmin: false, isLoginPage: false };
-  if (path === "login") return { slug: null, isAdmin: false, isLoginPage: true };
+  const base = { slug: null, isAdmin: false, isLoginPage: false, isOnboardingPage: false, isResetPasswordPage: false };
+  if (!path) return base;
+  if (path === "login") return { ...base, isLoginPage: true };
+  if (path === "onboarding") return { ...base, isOnboardingPage: true };
+  if (path === "reset-password") return { ...base, isResetPasswordPage: true };
   const parts = path.split("/");
   if (parts.length >= 2 && parts[parts.length - 1] === "admin") {
-    return { slug: parts.slice(0, -1).join("/"), isAdmin: true, isLoginPage: false };
+    return { ...base, slug: parts.slice(0, -1).join("/"), isAdmin: true };
   }
-  return { slug: parts.join("/"), isAdmin: false, isLoginPage: false };
+  return { ...base, slug: parts.join("/") };
 }
 
 // ============================================================
@@ -434,6 +460,22 @@ export default function FoodDropApp() {
     try { const s = localStorage.getItem("fd_session"); return s ? JSON.parse(s) : null; } catch { return null; }
   });
   const [authChecked, setAuthChecked] = useState(false);
+  const [authCallbackUser, setAuthCallbackUser] = useState(null);
+  // Capture email-verification / password-reset tokens that Supabase injects into the URL hash
+  const [authCallback] = useState(() => {
+    const h = window.location.hash;
+    if (h.includes("access_token=") && !h.startsWith("#/")) {
+      const params = new URLSearchParams(h.replace(/^#/, ""));
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+      const type = params.get("type");
+      if (access_token && type) {
+        window.history.replaceState(null, "", window.location.pathname + (type === "recovery" ? "#/reset-password" : "#/onboarding"));
+        return { access_token, refresh_token, type };
+      }
+    }
+    return null;
+  });
 
   const showToast = useCallback((msg, type = "ok") => { setToast(msg); setToastType(type); setTimeout(() => setToast(null), 3500); }, []);
 
@@ -443,16 +485,22 @@ export default function FoodDropApp() {
     else localStorage.removeItem("fd_session");
   }, [session]);
 
-  // Validate session on mount
+  // Validate session on mount; also resolve user from email-verification/password-reset callbacks
   useEffect(() => {
-    const checkSession = async () => {
+    const init = async () => {
+      if (authCallback?.access_token) {
+        const { user } = await supabase.auth.getUser(authCallback.access_token);
+        if (user) setAuthCallbackUser(user);
+        setAuthChecked(true);
+        return;
+      }
       if (session?.access_token) {
         const { user } = await supabase.auth.getUser(session.access_token);
         if (!user) setSession(null);
       }
       setAuthChecked(true);
     };
-    checkSession();
+    init();
   }, []);
 
 const handleLogin = async (email, password) => {
@@ -474,6 +522,46 @@ const handleLogin = async (email, password) => {
     if (session?.access_token) await supabase.auth.signOut(session.access_token);
     setSession(null);
     window.location.hash = "#/login";
+  };
+
+  const handleSignup = async (email, password) => {
+    const { user, error } = await supabase.auth.signUp(email, password);
+    if (error) return { error };
+    return { user, error: null };
+  };
+
+  const handleForgotPassword = async (email) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    if (error) return { error };
+    return { error: null };
+  };
+
+  const handleResetPassword = async (newPassword) => {
+    if (!authCallback?.access_token) return { error: { message: "Invalid or expired reset link." } };
+    const { error } = await supabase.auth.updateUser(authCallback.access_token, { password: newPassword });
+    if (error) return { error };
+    return { error: null };
+  };
+
+  const handleCompleteOnboarding = async (name) => {
+    if (!authCallbackUser) return;
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "creator";
+    const { data: existing } = await supabase.from("creators").select("slug").execute();
+    const slugSet = new Set((existing || []).map(c => c.slug));
+    let finalSlug = base; let n = 2;
+    while (slugSet.has(finalSlug)) { finalSlug = `${base}-${n}`; n++; }
+    const { data, error } = await supabase.from("creators").insert({
+      name,
+      slug: finalSlug,
+      auth_user_id: authCallbackUser.id,
+      email: authCallbackUser.email,
+      tagline: "",
+      bio: "",
+      social_links: {},
+    }).select("*").single().execute();
+    if (error) { showToast("Failed to create your profile. Please try again.", "error"); return; }
+    setSession({ access_token: authCallback.access_token, refresh_token: authCallback.refresh_token, user: authCallbackUser });
+    window.location.hash = `#/${data.slug}/admin`;
   };
 
   const loadData = useCallback(async () => {
@@ -522,8 +610,38 @@ const handleLogin = async (email, password) => {
 
   if (loading || !authChecked) return <><style>{CSS}</style><div className="app"><div className="loading-screen"><div className="spin"/><span>Loading FoodDrop...</span></div></div></>;
 
-// Universal login page at /#/login
-  const { isLoginPage } = parseRoute(route);
+// Onboarding + reset-password are standalone pages (reached via email link callbacks)
+  const { isLoginPage, isOnboardingPage, isResetPasswordPage } = parseRoute(route);
+
+  if (isOnboardingPage) {
+    if (!authCallback) { window.location.hash = "#/login"; return null; }
+    if (!authCallbackUser) return (
+      <><style>{CSS}</style><div className="app">
+        <div className="loading-screen" style={{color:"var(--text)"}}>
+          <h2>Link expired or invalid</h2>
+          <p style={{color:"var(--text-secondary)"}}>Please try signing up again.</p>
+          <a href="#/login" className="btn btn-primary" style={{marginTop:16,textDecoration:"none"}}>← Sign In</a>
+        </div>
+      </div></>
+    );
+    return (
+      <><style>{CSS}</style><div className="app">
+        <OnboardingPage userEmail={authCallbackUser.email} onComplete={handleCompleteOnboarding} showToast={showToast}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  if (isResetPasswordPage) {
+    return (
+      <><style>{CSS}</style><div className="app">
+        <ResetPasswordPage onReset={handleResetPassword} showToast={showToast}/>
+        {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
+      </div></>
+    );
+  }
+
+  // Universal login page at /#/login
   if (isLoginPage) {
     // If already logged in, redirect to their dashboard
     if (session?.user) {
@@ -535,7 +653,7 @@ const handleLogin = async (email, password) => {
     }
     return (
       <><style>{CSS}</style><div className="app">
-        <LoginPage creator={null} onLogin={handleLogin} showToast={showToast}/>
+        <LoginPage creator={null} onLogin={handleLogin} onSignup={handleSignup} onForgotPassword={handleForgotPassword} showToast={showToast}/>
         {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
       </div></>
     );
@@ -577,7 +695,7 @@ const handleLogin = async (email, password) => {
     if (!isLoggedIn) {
       return (
         <><style>{CSS}</style><div className="app">
-          <LoginPage creator={creator} onLogin={handleLogin} showToast={showToast}/>
+          <LoginPage creator={creator} onLogin={handleLogin} onSignup={handleSignup} onForgotPassword={handleForgotPassword} showToast={showToast}/>
           {toast && <div className={`toast ${toastType==="error"?"toast-error":""}`}>{toastType==="error"?"⚠️ ":""}{toastType!=="error"&&I.check}{toast}</div>}
         </div></>
       );
@@ -618,15 +736,20 @@ const handleLogin = async (email, password) => {
 }
 
 // ============================================================
-// LOGIN PAGE
+// LOGIN PAGE — Sign In / Create Account / Forgot Password
 // ============================================================
-function LoginPage({ creator, onLogin, showToast }) {
+function LoginPage({ creator, onLogin, onSignup, onForgotPassword, showToast }) {
+  const [view, setView] = useState("login"); // "login" | "signup" | "forgot" | "check-email"
+  const [checkEmailFor, setCheckEmailFor] = useState("signup"); // "signup" | "reset"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async () => {
+  const switchView = (v) => { setView(v); setError(null); setPassword(""); setConfirmPassword(""); };
+
+  const doLogin = async () => {
     if (!email || !password) return;
     setLoading(true); setError(null);
     const { error: err } = await onLogin(email, password);
@@ -634,7 +757,46 @@ function LoginPage({ creator, onLogin, showToast }) {
     if (err) setError(err.message);
   };
 
-  const handleKeyDown = (e) => { if (e.key === "Enter") handleSubmit(); };
+  const doSignup = async () => {
+    if (!email || !password || !confirmPassword) return;
+    if (password !== confirmPassword) { setError("Passwords don't match."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    setLoading(true); setError(null);
+    const { error: err } = await onSignup(email, password);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setCheckEmailFor("signup"); setView("check-email");
+  };
+
+  const doForgot = async () => {
+    if (!email) return;
+    setLoading(true); setError(null);
+    const { error: err } = await onForgotPassword(email);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setCheckEmailFor("reset"); setView("check-email");
+  };
+
+  const handleKey = (e) => { if (e.key !== "Enter") return; if (view==="login") doLogin(); else if (view==="signup") doSignup(); else if (view==="forgot") doForgot(); };
+
+  if (view === "check-email") {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <div className="login-brand">
+            <div className="login-brand-icon">📬</div>
+            <h2>Check your email</h2>
+            <p>We sent a link to <strong>{email}</strong></p>
+          </div>
+          <p style={{fontSize:14,color:"var(--text-secondary)",textAlign:"center",lineHeight:1.6,marginBottom:8}}>
+            Click the link in that email to {checkEmailFor==="signup"?"verify your account and continue setup":"reset your password"}.
+          </p>
+          <p style={{fontSize:12,color:"var(--text-tertiary)",textAlign:"center",marginBottom:20}}>Don't see it? Check your spam folder.</p>
+          <button className="btn btn-ghost btn-full" onClick={()=>switchView("login")}>← Back to sign in</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="login-page">
@@ -642,12 +804,162 @@ function LoginPage({ creator, onLogin, showToast }) {
         <div className="login-brand">
           <div className="login-brand-icon">🍽️</div>
           <h2>{creator?.name || "FoodDrop"}</h2>
-          <p>Creator Dashboard</p>
+          <p>{view==="forgot" ? "Reset your password" : "Creator Dashboard"}</p>
+        </div>
+
+        {view !== "forgot" && (
+          <div style={{display:"flex",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",padding:3,marginBottom:20}}>
+            <button onClick={()=>switchView("login")} style={{flex:1,padding:"7px 0",borderRadius:"var(--radius-sm)",border:"none",background:view==="login"?"var(--surface)":"transparent",fontWeight:view==="login"?600:400,cursor:"pointer",fontSize:13,color:"var(--text)",boxShadow:view==="login"?"var(--shadow-sm)":"none",transition:"all 0.15s"}}>Sign In</button>
+            <button onClick={()=>switchView("signup")} style={{flex:1,padding:"7px 0",borderRadius:"var(--radius-sm)",border:"none",background:view==="signup"?"var(--surface)":"transparent",fontWeight:view==="signup"?600:400,cursor:"pointer",fontSize:13,color:"var(--text)",boxShadow:view==="signup"?"var(--shadow-sm)":"none",transition:"all 0.15s"}}>Create Account</button>
+          </div>
+        )}
+
+        {error && <div className="login-error">{error}</div>}
+
+        <div className="form-group">
+          <label className="form-label">Email</label>
+          <input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKey}/>
+        </div>
+
+        {view !== "forgot" && (
+          <div className="form-group">
+            <label className="form-label">Password</label>
+            <input className="form-input" type="password" placeholder={view==="signup"?"Create a password (min 6 chars)":"Enter your password"} value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKey}/>
+          </div>
+        )}
+
+        {view === "signup" && (
+          <div className="form-group">
+            <label className="form-label">Confirm Password</label>
+            <input className="form-input" type="password" placeholder="Re-enter your password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} onKeyDown={handleKey}/>
+          </div>
+        )}
+
+        {view === "login" && (
+          <div style={{textAlign:"right",marginBottom:16,marginTop:-8}}>
+            <button onClick={()=>switchView("forgot")} style={{background:"none",border:"none",cursor:"pointer",color:"var(--text-secondary)",fontSize:12}}>Forgot password?</button>
+          </div>
+        )}
+
+        {view === "login" && <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={doLogin}>{loading?"Signing in...":"Sign In"}</button>}
+        {view === "signup" && <button className="btn btn-primary btn-full" disabled={!email||!password||!confirmPassword||loading} onClick={doSignup}>{loading?"Creating account...":"Create Account"}</button>}
+        {view === "forgot" && (
+          <>
+            <button className="btn btn-primary btn-full" disabled={!email||loading} onClick={doForgot} style={{marginTop:4}}>{loading?"Sending...":"Send Reset Email"}</button>
+            <button className="btn btn-ghost btn-full" style={{marginTop:8}} onClick={()=>switchView("login")}>← Back to sign in</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ONBOARDING PAGE — post email-verification, collect business name
+// ============================================================
+const ROTATING_WORDS = ["bakery", "food biz", "cookie brand", "farm stand", "pop-up", "company"];
+function OnboardingPage({ userEmail, onComplete, showToast }) {
+  const [wordIdx, setWordIdx] = useState(0);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const t = setInterval(() => setWordIdx(i => (i + 1) % ROTATING_WORDS.length), 1800);
+    return () => clearInterval(t);
+  }, []);
+
+  const handleSubmit = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    await onComplete(name.trim());
+    setSaving(false);
+  };
+
+  return (
+    <div className="login-page">
+      <div className="login-card" style={{maxWidth:440}}>
+        <div className="login-brand">
+          <div className="login-brand-icon">🍽️</div>
+          <h2>Welcome to FoodDrop</h2>
+          {userEmail && <p style={{fontSize:12,color:"var(--text-tertiary)",marginTop:4}}>{userEmail}</p>}
+        </div>
+        <p style={{fontSize:18,fontWeight:600,color:"var(--text)",marginBottom:20,textAlign:"center",lineHeight:1.4}}>
+          {"What's the name of your "}
+          <span style={{color:"var(--accent)"}}>{ROTATING_WORDS[wordIdx]}</span>{"?"}
+        </p>
+        <div className="form-group">
+          <input
+            className="form-input"
+            style={{fontSize:15}}
+            placeholder='e.g., "Warmly Cookies"'
+            value={name}
+            onChange={e=>setName(e.target.value)}
+            onKeyDown={e=>{ if (e.key==="Enter") handleSubmit(); }}
+            autoFocus
+          />
+          <div className="form-hint" style={{textAlign:"center",marginTop:8}}>* You can update this anytime in Settings.</div>
+        </div>
+        <button className="btn btn-primary btn-full" disabled={!name.trim()||saving} onClick={handleSubmit} style={{marginTop:4}}>
+          {saving ? "Setting up your dashboard…" : "Continue →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// RESET PASSWORD PAGE — reached via password-reset email link
+// ============================================================
+function ResetPasswordPage({ onReset, showToast }) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!password || !confirmPassword) return;
+    if (password !== confirmPassword) { setError("Passwords don't match."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    setLoading(true); setError(null);
+    const { error: err } = await onReset(password);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setDone(true);
+    showToast("Password updated successfully.");
+    setTimeout(() => { window.location.hash = "#/login"; }, 1800);
+  };
+
+  if (done) return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-icon">✅</div>
+          <h2>Password updated</h2>
+          <p>Redirecting you to sign in…</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-brand-icon">🔑</div>
+          <h2>Set a new password</h2>
+          <p>Choose a strong password for your account</p>
         </div>
         {error && <div className="login-error">{error}</div>}
-        <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" placeholder="your@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={handleKeyDown}/></div>
-        <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" placeholder="Enter your password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={handleKeyDown}/></div>
-        <button className="btn btn-primary btn-full" disabled={!email||!password||loading} onClick={handleSubmit}>{loading?"Signing in...":"Sign In"}</button>
+        <div className="form-group">
+          <label className="form-label">New Password</label>
+          <input className="form-input" type="password" placeholder="Min 6 characters" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")handleSubmit();}}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Confirm Password</label>
+          <input className="form-input" type="password" placeholder="Re-enter your password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")handleSubmit();}}/>
+        </div>
+        <button className="btn btn-primary btn-full" disabled={!password||!confirmPassword||loading} onClick={handleSubmit}>{loading?"Updating...":"Set New Password"}</button>
       </div>
     </div>
   );
