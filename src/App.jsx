@@ -1000,6 +1000,7 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
   const [showNewProduct, setShowNewProduct] = useState(false);
   const [showEditProduct, setShowEditProduct] = useState(null); // product object
   const [showDeleteProduct, setShowDeleteProduct] = useState(null); // product object
+  const [showImportProducts, setShowImportProducts] = useState(false);
   const [showNewDrop, setShowNewDrop] = useState(false);
   const [prefilledDropDate, setPrefilledDropDate] = useState(null); // v27a: set when creating a drop from calendar click
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -1328,6 +1329,8 @@ function CreatorDashboard({ creator, customers, drops, orders, orderItems, dropI
     loadData();
   };
 
+  const handleImportProducts = () => { loadData(); };
+
 const handleDeleteDropPermanently = async (dropId) => {
     // Delete in order: order_items → orders → drop_items → drop
     const dropOrderIds = orders.filter(o => o.drop_id === dropId).map(o => o.id);
@@ -1401,7 +1404,7 @@ const handleDeleteDropPermanently = async (dropId) => {
         {tab==="dashboard" && <DashboardTab creator={creator} customers={customers} drops={drops} orders={orders} orderItems={orderItems} dropItems={dropItems} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}} onShowRevenue={()=>setTab("reports")} onGoToDrops={()=>setTab("drops")} onNewDrop={()=>{setTab("drops");setShowNewDrop(true)}} onGoToSettings={()=>setTab("settings")} onGoToCustomers={()=>setTab("customers")} onGoToWelcomeEmail={()=>setTab("settings")}/>}
         {tab==="drops" && !selectedDrop && <DropsTab drops={drops} getDropItems={getDropItems} getDropOrders={getDropOrders} onSelect={setSelectedDrop} onNew={()=>setShowNewDrop(true)} onNewOnDate={(date)=>{setPrefilledDropDate(date);setShowNewDrop(true)}} onArchive={handleArchiveDrop} onUnarchive={handleUnarchiveDrop} onDuplicate={(drop)=>{setDuplicateDrop(drop);setShowNewDrop(true)}} onDeletePermanently={(drop)=>setShowDeleteDrop(drop)} onAnnounce={(drop)=>setShowBlast(drop)}/>}
         {tab==="drops" && selectedDrop && <DropDetail drop={selectedDrop} getDropItems={getDropItems} getDropOrders={getDropOrders} getOrderItems={getOrderItems} customers={customers} onBack={()=>setSelectedDrop(null)} onUpdateOrderStatus={handleUpdateOrderStatus} onMarkPaid={handleMarkPaid} onEndDrop={handleEndDrop} onEditDrop={()=>setShowEditDrop(selectedDrop)} onArchiveDrop={()=>handleArchiveDrop(selectedDrop.id)} onEditOrder={(order)=>setShowEditOrder({order,dropId:selectedDrop.id})} onDuplicate={()=>{setDuplicateDrop(selectedDrop);setSelectedDrop(null);setShowNewDrop(true)}} onNewOrder={()=>setShowManualOrder(selectedDrop)}/>}
-        {tab==="products" && <ProductsTab products={products} dropItems={dropItems} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)}/>}
+        {tab==="products" && <ProductsTab products={products} dropItems={dropItems} onNew={()=>setShowNewProduct(true)} onEdit={(p)=>setShowEditProduct(p)} onArchive={handleArchiveProduct} onUnarchive={handleUnarchiveProduct} onDeletePermanently={(p)=>setShowDeleteProduct(p)} onImport={()=>setShowImportProducts(true)}/>}
         {tab==="customers" && !selectedCustomer && <CustomersTab customers={customers} orders={orders} drops={drops} getDropOrders={getDropOrders} onAddCustomer={()=>setShowNewCustomer(true)} onCompose={()=>setShowCompose(true)} onSelectCustomer={setSelectedCustomer} onImport={()=>setShowImportCSV(true)} onBulkDelete={(ids)=>setShowBulkDelete(ids)}/>}
         {tab==="customers" && selectedCustomer && <CustomerDetail customer={selectedCustomer} orders={orders} drops={drops} customers={customers} getOrderItems={getOrderItems} onBack={()=>setSelectedCustomer(null)} onEdit={()=>setShowEditCustomer(selectedCustomer)} onDelete={()=>handleDeleteCustomer(selectedCustomer.id, selectedCustomer.name)} onMerge={handleMergeCustomers}/>}
         {tab==="reports" && <ReportsTab drops={drops} orders={orders} orderItems={orderItems} customers={customers} getDropOrders={getDropOrders} getDropItems={getDropItems} getOrderItems={getOrderItems} onViewDrop={d=>{setSelectedDrop(d);setTab("drops")}}/>}
@@ -1424,6 +1427,7 @@ const handleDeleteDropPermanently = async (dropId) => {
       {showNewProduct && <ProductFormModal mode="create" onSave={handleCreateProduct} onClose={()=>setShowNewProduct(false)} allExistingTags={[...new Set(products.flatMap(p=>p.tags||[]))].sort()}/>}
       {showEditProduct && <ProductFormModal mode="edit" product={showEditProduct} onSave={(d)=>handleEditProduct(showEditProduct.id,d)} onClose={()=>setShowEditProduct(null)} allExistingTags={[...new Set(products.flatMap(p=>p.tags||[]))].sort()} onArchive={()=>{handleArchiveProduct(showEditProduct.id);setShowEditProduct(null);}} onUnarchive={()=>{handleUnarchiveProduct(showEditProduct.id);setShowEditProduct(null);}} onDelete={()=>{setShowDeleteProduct(showEditProduct);setShowEditProduct(null);}}/>}
       {showDeleteProduct && <PermanentDeleteProductModal product={showDeleteProduct} onConfirm={()=>handleDeleteProductPermanently(showDeleteProduct.id)} onClose={()=>setShowDeleteProduct(null)}/>}
+      {showImportProducts && <ImportProductsModal products={products} creator={creator} onImport={handleImportProducts} onClose={()=>setShowImportProducts(false)}/>}
     </>
   );
 }
@@ -2345,7 +2349,7 @@ function DropDetail({ drop, getDropItems, getDropOrders, getOrderItems, customer
 // ============================================================
 // v28a: PRODUCTS TAB — creator product library
 // ============================================================
-function ProductsTab({ products, dropItems, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently }) {
+function ProductsTab({ products, dropItems, onNew, onEdit, onArchive, onUnarchive, onDeletePermanently, onImport }) {
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState(null);
@@ -2372,6 +2376,7 @@ function ProductsTab({ products, dropItems, onNew, onEdit, onArchive, onUnarchiv
       </div>
       <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
         {archivedCount > 0 && <button className="btn btn-ghost btn-sm" onClick={()=>setShowArchived(!showArchived)}>{I.archive} {showArchived ? "Hide" : "Show"} Archived ({archivedCount})</button>}
+        <button className="btn btn-secondary" onClick={onImport}>{I.upload} Import CSV</button>
         <button className="btn btn-primary" onClick={onNew}>{I.plus} New Product</button>
       </div>
     </div>
@@ -2998,7 +3003,261 @@ function PermanentDeleteProductModal({ product, onConfirm, onClose }) {
     </div></div>
   );
 }
-      
+
+// CSV helpers for product import
+function parseCSVText(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return null;
+  const parseRow = (line) => {
+    const cells = []; let cur = ""; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+      else if (c === "," && !inQ) { cells.push(cur.trim()); cur = ""; }
+      else cur += c;
+    }
+    cells.push(cur.trim());
+    return cells;
+  };
+  const headers = parseRow(lines[0]).map(h => h.replace(/^"|"$/g, "").trim());
+  const rows = lines.slice(1).map(parseRow).filter(r => r.some(c => c.replace(/^"|"$/g, "").trim()));
+  return { headers, rows };
+}
+function autoDetectProductCols(headers) {
+  const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const find = (...kws) => { const i = headers.findIndex(h => kws.some(k => norm(h).includes(k))); return i >= 0 ? i : null; };
+  return {
+    name: find("itemname", "productname", "variationname", "name", "title"),
+    description: find("description", "desc"),
+    price: find("price", "unitprice", "amount", "cost"),
+    sku: find("sku", "itemnumber", "barcode", "gtin", "upc"),
+    tags: find("category", "tag", "type", "group"),
+    image_url: find("imageurl", "imagelink", "image", "photo"),
+  };
+}
+function parsePriceVal(v) {
+  if (!v) return 0;
+  const n = parseFloat(String(v).replace(/[$,\s]/g, ""));
+  return isNaN(n) ? 0 : Math.round(n * 100) / 100;
+}
+function csvCellVal(row, idx) {
+  if (idx === null || idx === undefined || idx < 0) return "";
+  return (row[idx] || "").replace(/^"|"$/g, "").trim();
+}
+
+// Import Products modal — multi-step: upload → map columns → preview → done
+function ImportProductsModal({ products, creator, onImport, onClose }) {
+  const [step, setStep] = useState("upload"); // upload | map | preview | importing | done
+  const [parsed, setParsed] = useState(null);
+  const [fileName, setFileName] = useState("");
+  const [fileError, setFileError] = useState(null);
+  const [fieldMap, setFieldMap] = useState({ name: null, description: null, price: null, sku: null, tags: null, image_url: null });
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
+  const [results, setResults] = useState(null);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name); setFileError(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const data = parseCSVText(ev.target.result);
+      if (!data || data.rows.length === 0) { setFileError("File needs a header row and at least one data row."); return; }
+      if (data.headers.length < 2) { setFileError("Not enough columns detected — make sure this is a comma-separated CSV file."); return; }
+      setParsed(data); setFieldMap(autoDetectProductCols(data.headers)); setStep("map");
+    };
+    reader.onerror = () => setFileError("Could not read file.");
+    reader.readAsText(file);
+  };
+
+  // Compute duplicates from current fieldMap
+  const existingNames = new Set(products.map(p => p.name.trim().toLowerCase()));
+  const existingSkus = new Set(products.filter(p => p.sku).map(p => p.sku.trim().toLowerCase()));
+  const dupeIdxs = !parsed || fieldMap.name === null ? new Set() : new Set(
+    parsed.rows.reduce((acc, row, i) => {
+      const n = csvCellVal(row, fieldMap.name).toLowerCase();
+      const s = csvCellVal(row, fieldMap.sku).toLowerCase();
+      if (existingNames.has(n) || (s && existingSkus.has(s))) acc.push(i);
+      return acc;
+    }, [])
+  );
+  const rowsToImport = !parsed ? [] : parsed.rows.filter((_, i) => !skipDuplicates || !dupeIdxs.has(i));
+
+  const doImport = async () => {
+    setStep("importing");
+    const inserts = rowsToImport.map(row => {
+      const imgUrl = csvCellVal(row, fieldMap.image_url);
+      const tagVal = csvCellVal(row, fieldMap.tags);
+      return {
+        creator_id: creator.id,
+        name: csvCellVal(row, fieldMap.name) || "Unnamed Product",
+        description: csvCellVal(row, fieldMap.description),
+        price: parsePriceVal(csvCellVal(row, fieldMap.price)),
+        sku: csvCellVal(row, fieldMap.sku),
+        tags: tagVal ? [tagVal] : [],
+        image_url: imgUrl,
+        image_data: imgUrl ? { url: imgUrl, x: 50, y: 50 } : null,
+        capacity_weight: 1,
+        archived: false,
+      };
+    });
+    let imported = 0, failed = 0;
+    if (inserts.length > 0) {
+      const { error } = await supabase.from("products").insert(inserts).execute();
+      if (error) {
+        for (const ins of inserts) {
+          const { error: e2 } = await supabase.from("products").insert(ins).execute();
+          if (e2) failed++; else imported++;
+        }
+      } else { imported = inserts.length; }
+    }
+    setResults({ imported, failed, skipped: skipDuplicates ? dupeIdxs.size : 0 });
+    onImport();
+    setStep("done");
+  };
+
+  const FIELDS = [
+    { key: "name", label: "Product Name", required: true },
+    { key: "description", label: "Description", required: false },
+    { key: "price", label: "Price", required: false },
+    { key: "sku", label: "SKU / Item Number", required: false },
+    { key: "tags", label: "Category / Tags", required: false },
+    { key: "image_url", label: "Image URL", required: false },
+  ];
+
+  if (step === "done") return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-header"><h2>Import Complete</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <div style={{textAlign:"center",padding:"24px 0"}}>
+        <div style={{fontSize:40,marginBottom:12}}>✅</div>
+        {results && <>
+          <div style={{fontSize:20,fontWeight:700,marginBottom:8}}>{results.imported} product{results.imported!==1?"s":""} imported</div>
+          {results.skipped>0 && <div style={{fontSize:14,color:"var(--text-secondary)",marginBottom:4}}>{results.skipped} duplicate{results.skipped!==1?"s":""} skipped</div>}
+          {results.failed>0 && <div style={{fontSize:14,color:"var(--red)",marginBottom:4}}>{results.failed} failed to import</div>}
+        </>}
+      </div>
+      <button className="btn btn-primary btn-full" onClick={onClose}>Done</button>
+    </div></div>
+  );
+
+  if (step === "importing") return (
+    <div className="modal-overlay"><div className="modal">
+      <div className="modal-header"><h2>Importing Products…</h2></div>
+      <div style={{textAlign:"center",padding:"32px 0"}}>
+        <div className="spin" style={{width:36,height:36,margin:"0 auto 16px"}}/>
+        <p style={{color:"var(--text-secondary)"}}>Adding {rowsToImport.length} products to your catalog…</p>
+      </div>
+    </div></div>
+  );
+
+  if (step === "preview") {
+    const dupeCount = dupeIdxs.size;
+    const previewRows = parsed.rows.slice(0, 10);
+    return (
+      <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:680}}>
+        <div className="modal-header"><h2>Review Import</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+        <div style={{display:"flex",gap:10,marginBottom:16}}>
+          <div style={{flex:1,padding:"10px 14px",background:"var(--surface-alt)",borderRadius:"var(--radius-sm)",textAlign:"center"}}>
+            <div style={{fontSize:20,fontWeight:700}}>{parsed.rows.length}</div>
+            <div style={{fontSize:11,color:"var(--text-secondary)"}}>rows in file</div>
+          </div>
+          <div style={{flex:1,padding:"10px 14px",background:dupeCount>0?"var(--gold-light)":"var(--surface-alt)",borderRadius:"var(--radius-sm)",textAlign:"center"}}>
+            <div style={{fontSize:20,fontWeight:700,color:dupeCount>0?"var(--text)":"var(--text)"}}>{dupeCount}</div>
+            <div style={{fontSize:11,color:"var(--text-secondary)"}}>duplicates detected</div>
+          </div>
+          <div style={{flex:1,padding:"10px 14px",background:"var(--accent-light)",borderRadius:"var(--radius-sm)",textAlign:"center"}}>
+            <div style={{fontSize:20,fontWeight:700,color:"var(--accent)"}}>{rowsToImport.length}</div>
+            <div style={{fontSize:11,color:"var(--accent)"}}>will be imported</div>
+          </div>
+        </div>
+        {dupeCount > 0 && (
+          <div style={{padding:"12px 14px",background:"var(--gold-light)",borderRadius:"var(--radius-sm)",marginBottom:14,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:13,flex:1}}><strong>{dupeCount}</strong> product{dupeCount!==1?"s":""} already exist in your catalog.</span>
+            <div style={{display:"flex",gap:8}}>
+              <button className={`btn btn-sm ${skipDuplicates?"btn-primary":"btn-secondary"}`} onClick={()=>setSkipDuplicates(true)}>Skip {dupeCount} duplicate{dupeCount!==1?"s":""}</button>
+              <button className={`btn btn-sm ${!skipDuplicates?"btn-primary":"btn-secondary"}`} onClick={()=>setSkipDuplicates(false)}>Import anyway</button>
+            </div>
+          </div>
+        )}
+        <div className="import-preview" style={{marginBottom:12}}>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                {fieldMap.price!==null&&<th>Price</th>}
+                {fieldMap.sku!==null&&<th>SKU</th>}
+                {fieldMap.tags!==null&&<th>Category</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.map((row, i) => {
+                const isDupe = dupeIdxs.has(i);
+                const isSkipped = isDupe && skipDuplicates;
+                return (
+                  <tr key={i} style={{background:isDupe?"var(--gold-light)":"transparent",opacity:isSkipped?0.45:1}}>
+                    <td>
+                      {csvCellVal(row,fieldMap.name)||<span style={{color:"var(--text-tertiary)"}}>—</span>}
+                      {isDupe&&<span style={{marginLeft:6,fontSize:10,background:"#f5e6c8",color:"#7a5c1e",padding:"1px 6px",borderRadius:3,fontWeight:600}}>{isSkipped?"will skip":"duplicate"}</span>}
+                    </td>
+                    {fieldMap.price!==null&&<td>{csvCellVal(row,fieldMap.price)||"—"}</td>}
+                    {fieldMap.sku!==null&&<td style={{color:"var(--text-secondary)"}}>{csvCellVal(row,fieldMap.sku)||"—"}</td>}
+                    {fieldMap.tags!==null&&<td style={{color:"var(--text-secondary)"}}>{csvCellVal(row,fieldMap.tags)||"—"}</td>}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {parsed.rows.length > 10 && <p style={{fontSize:12,color:"var(--text-tertiary)",marginBottom:12}}>Showing first 10 of {parsed.rows.length} rows.</p>}
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button className="btn btn-secondary" onClick={()=>setStep("map")}>← Back</button>
+          <button className="btn btn-primary" disabled={rowsToImport.length===0} onClick={doImport}>Import {rowsToImport.length} Product{rowsToImport.length!==1?"s":""}</button>
+        </div>
+      </div></div>
+    );
+  }
+
+  if (step === "map") return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:520}}>
+      <div className="modal-header"><h2>Match Your Columns</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:20}}>Found <strong>{parsed.headers.length} columns</strong> and <strong>{parsed.rows.length} rows</strong> in <strong>{fileName}</strong>. Map each field to a column from your file.</p>
+      {FIELDS.map(f => (
+        <div key={f.key} style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+          <div style={{flex:"0 0 160px",fontSize:13,fontWeight:500}}>
+            {f.label}{f.required&&<span style={{color:"var(--accent)"}}> *</span>}
+          </div>
+          <select
+            className="form-input"
+            style={{flex:1,height:36,fontSize:13}}
+            value={fieldMap[f.key]??-1}
+            onChange={e=>{const v=parseInt(e.target.value);setFieldMap(p=>({...p,[f.key]:v<0?null:v}));}}
+          >
+            <option value={-1}>— Don't import —</option>
+            {parsed.headers.map((h,i)=><option key={i} value={i}>{h}</option>)}
+          </select>
+        </div>
+      ))}
+      {fieldMap.name===null&&<p style={{fontSize:12,color:"var(--red)",marginBottom:8}}>Product Name is required — please map it to a column.</p>}
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
+        <button className="btn btn-secondary" onClick={()=>setStep("upload")}>← Back</button>
+        <button className="btn btn-primary" disabled={fieldMap.name===null} onClick={()=>setStep("preview")}>Continue →</button>
+      </div>
+    </div></div>
+  );
+
+  return (
+    <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-header"><h2>Import Products from CSV</h2><button className="btn btn-ghost" onClick={onClose}>{I.x}</button></div>
+      <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:16}}>Export your items from Square, Clover, or another point-of-sale system as a <strong>CSV file</strong>, then upload it here. We'll walk you through matching the columns.</p>
+      <div className="img-upload" style={{marginBottom:16}}>
+        <input type="file" accept=".csv,.txt" onChange={handleFile}/>
+        <div>{I.upload}<div style={{fontSize:13,color:"var(--text-secondary)",marginTop:4}}>{fileName||"Click to select a CSV file"}</div></div>
+      </div>
+      {fileError&&<div style={{padding:12,background:"var(--red-light)",color:"var(--red)",borderRadius:"var(--radius-sm)",fontSize:13}}>{fileError}</div>}
+    </div></div>
+  );
+}
+
 function ManualOrderModal({ drop, dropItems, customers, creator, onSave, onClose }) {
   const [customerMode, setCustomerMode] = useState("existing"); // "existing" | "new"
   const [search, setSearch] = useState("");
